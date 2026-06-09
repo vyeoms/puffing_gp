@@ -22,8 +22,11 @@ typedef struct {
     int   dim, n, cap;
     double *d_X;              // (cap x dim) row-major, device
     double *d_y;              // (cap,) device
-    double *d_L;              // (n x n) lower Cholesky, column-major, device
-    double *d_alpha;          // (n,) device
+    double *d_L;              // (cap x cap) buffer; leading n x n is lower Cholesky, column-major
+    double *d_alpha;          // (cap,) buffer; leading n is K_y^-1 * y
+    double *d_work;           // cuSOLVER potrf workspace (grown on demand)
+    int     lwork;            // d_work size in doubles
+    int    *d_info;           // cuSOLVER status scalar, device
     double  raw_noise;
     double  dedup_threshold;  // near-duplicate filter; 0 = disabled
     cublasHandle_t      cublas;

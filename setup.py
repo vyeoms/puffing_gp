@@ -10,41 +10,22 @@ Requires: libopenblas-dev, liblapacke-dev
   (apt install libopenblas-dev liblapacke-dev)
 """
 
-import os, shutil, subprocess, platform
+import os, shutil, subprocess
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext as Pybind11BuildExt
 import pybind11
 
-# platform / OpenMP flags
-
-if platform.system() == "Darwin":
-    omp_flags = ["-Xpreprocessor", "-fopenmp"]
-    omp_libs  = ["omp"]
-    omp_prefix = os.popen("brew --prefix libomp 2>/dev/null").read().strip()
-    blas_inc  = ["/usr/include/x86_64-linux-gnu"]
-    blas_lib  = ["/usr/lib/x86_64-linux-gnu/openblas-pthread"]
-    if omp_prefix:
-        blas_inc.append(f"{omp_prefix}/include")
-        blas_lib.append(f"{omp_prefix}/lib")
-else:
-    omp_flags = ["-fopenmp"]
-    omp_libs  = ["gomp"]
-    blas_inc  = ["/usr/include/x86_64-linux-gnu"]
-    blas_lib  = ["/usr/lib/x86_64-linux-gnu/openblas-pthread"]
-
-# CPU extension
+# CPU extension (Linux only)
 
 cpu_ext = Pybind11Extension(
     "puffing_gp",
     sources=["gp_kernel.c", "gp.c", "gp_bind.cpp"],
     language="c++",
-    include_dirs=blas_inc,
-    library_dirs=blas_lib,
-    libraries=["openblas", "lapacke"]
-              + (["mvec"] if platform.system() != "Darwin" else [])
-              + omp_libs,
-    extra_compile_args=["-O3", "-march=native", "-ffast-math"] + omp_flags,
-    extra_link_args=omp_flags,
+    include_dirs=["/usr/include/x86_64-linux-gnu"],
+    library_dirs=["/usr/lib/x86_64-linux-gnu/openblas-pthread"],
+    libraries=["openblas", "lapacke", "mvec", "gomp"],
+    extra_compile_args=["-O3", "-march=native", "-ffast-math", "-fopenmp"],
+    extra_link_args=["-fopenmp"],
 )
 
 # CUDA extension (optional)

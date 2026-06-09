@@ -22,7 +22,7 @@ static inline double softplus     (double x) { return (x > 20.0 ? x : log1p(exp(
 static inline double inv_softplus (double x) { double v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
 static inline double softplus_grad(double x) { return 1.0 / (1.0 + exp(-x)); }
 
-// Index helpers — n_params = dim+2, so SF = n_params-2, OFF = n_params-1.
+// Index helpers -- n_params = dim+2, so SF = n_params-2, OFF = n_params-1.
 #define SF_IDX(np)  ((np) - 2)
 #define OFF_IDX(np) ((np) - 1)
 
@@ -44,34 +44,31 @@ static void m32lin_build_K(const GPKernel *k, const double *X, int n, int d,
             Xs[i * d + dd] = X[i * d + dd] * inv_ell[dd];
     free(inv_ell);
 
-    // DOT[i*n+j] = xi.xj  (for linear kernel term)
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                n, n, d, 1.0, X, d, X, d, 0.0, K, n);
-
-    // DOT_s and scaled norms for ARD distance computation
-    double *DOT_s  = (double *)malloc((size_t)n * n * sizeof(double));
-    double *norms_s = (double *)malloc(n * sizeof(double));
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                n, n, d, 1.0, Xs, d, Xs, d, 0.0, DOT_s, n);
-    for (int i = 0; i < n; i++)
-        norms_s[i] = DOT_s[i * (n + 1)];  // diagonal of Xs*Xs^T
+    // Lower triangles only (K is symmetric): DOT = X*X^T in K, DOT_s = Xs*Xs^T
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                n, d, 1.0, X, d, 0.0, K, n);
+    double *DOT_s = (double *)malloc((size_t)n * n * sizeof(double));
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                n, d, 1.0, Xs, d, 0.0, DOT_s, n);
     free(Xs);
 
+    // Fill lower triangle, mirror to upper
     for (int i = 0; i < n; i++) {
-        double  ns_i = norms_s[i];
-        double *Ki   = K + i * n;
-        double *Ks_i = DOT_s + i * n;
-        for (int j = 0; j < n; j++) {
-            double dot = Ki[j];
-            double r2  = ns_i + norms_s[j] - 2.0 * Ks_i[j];
+        double  ns_i = DOT_s[(size_t)i * (n + 1)];
+        double *Ki   = K + (size_t)i * n;
+        double *Ds_i = DOT_s + (size_t)i * n;
+        for (int j = 0; j < i; j++) {
+            double r2 = ns_i + DOT_s[(size_t)j * (n + 1)] - 2.0 * Ds_i[j];
             if (r2 < 0.0) r2 = 0.0;
-            double u   = sqrt(3.0) * sqrt(r2);
-            Ki[j] = sigma_f * (dot + offset + (1.0 + u) * exp(-u));
+            double u = sqrt(3.0) * sqrt(r2);
+            double v = sigma_f * (Ki[j] + offset + (1.0 + u) * exp(-u));
+            Ki[j] = v;
+            K[(size_t)j * n + i] = v;
         }
-        Ki[i] += sigma_n;
+        // diagonal: r = 0, Matern32(0) = 1
+        Ki[i] = sigma_f * (Ki[i] + offset + 1.0) + sigma_n;
     }
     free(DOT_s);
-    free(norms_s);
 }
 
 static void m32lin_build_Ks(const GPKernel *k, const double *Xtr, const double *Xte,
@@ -153,19 +150,23 @@ static void m32lin_mll_grad(const GPKernel *k, const double *X, int n, int d,
         inv_ell3[dd] = inv_ells[dd] * inv_ells[dd] * inv_ells[dd];
     }
 
-    // DOT[i*n+j] = xi.xj (for sf gradient term)
+    // DOT lower triangle: DOT[i*n+j] = xi.xj (for sf gradient term)
     double *DOT = (double *)malloc((size_t)n * n * sizeof(double));
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                n, n, d, 1.0, X, d, X, d, 0.0, DOT, n);
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                n, d, 1.0, X, d, 0.0, DOT, n);
 
     double *g_ell = (double *)calloc(d, sizeof(double));
     double  g_sf  = 0.0;
     double *tmp   = (double *)malloc(d * sizeof(double));
 
+    // dK terms are symmetric: visit each off-diagonal pair once with weight 2.
     for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            double dot    = DOT[i * n + j];
-            double r2     = 0.0;
+        // diagonal: r = 0, only sf gradient contributes
+        double aa_ii = alpha[i] * alpha[i] - Kinv[(size_t)i * (n + 1)];
+        g_sf += aa_ii * (DOT[(size_t)i * (n + 1)] + offset + 1.0);
+
+        for (int j = 0; j < i; j++) {
+            double r2 = 0.0;
             // compute ARD distance and store per-dim diffs
             for (int dd = 0; dd < d; dd++) {
                 double diff = X[i * d + dd] - X[j * d + dd];
@@ -173,11 +174,10 @@ static void m32lin_mll_grad(const GPKernel *k, const double *X, int n, int d,
                 double sd = diff * inv_ells[dd];
                 r2 += sd * sd;
             }
-            if (r2 < 0.0) r2 = 0.0;
             double u       = sqrt(3.0) * sqrt(r2);
             double e_ij    = exp(-u);
-            double aa_kinv = alpha[i] * alpha[j] - Kinv[i * n + j];
-            g_sf += aa_kinv * (dot + offset + (1.0 + u) * e_ij);
+            double aa_kinv = 2.0 * (alpha[i] * alpha[j] - Kinv[(size_t)i * n + j]);
+            g_sf += aa_kinv * (DOT[(size_t)i * n + j] + offset + (1.0 + u) * e_ij);
             double coeff = aa_kinv * sigma_f * 3.0 * e_ij;
             for (int dd = 0; dd < d; dd++)
                 g_ell[dd] += coeff * tmp[dd] * tmp[dd] * inv_ell3[dd];

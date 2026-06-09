@@ -83,7 +83,7 @@ def main():
     gpt.train(); lik.train()
 
     # -- step-by-step comparison -------------------------------------------
-    print(f"\n{'step':>4}  {'MLL (ours)':>11}  {'MLL (gpt)':>11}  {'|ΔMLL|':>8}"
+    print(f"\n{'step':>4}  {'MLL (ours)':>11}  {'MLL (gpt)':>11}  {'|dMLL|':>8}"
           f"  {'ell_ours':>9}  {'ell_gpt':>9}  {'noise_ours':>11}  {'noise_gpt':>11}")
     print("-" * 102)
 
@@ -129,7 +129,7 @@ def main():
     print("Final hyperparameters:")
     for label, ov, gv in zip(["lengthscale", "outputscale", "noise", "offset"],
                               ours_vals, gpt_vals):
-        print(f"  {label:12s}  ours={ov:.6f}  gpt={gv:.6f}  |Δ|={abs(ov - gv):.2e}")
+        print(f"  {label:12s}  ours={ov:.6f}  gpt={gv:.6f}  |d|={abs(ov - gv):.2e}")
 
     # -- gradient agreement at a fixed point (sanity check) ----------------
     print()
@@ -174,7 +174,7 @@ def main():
 
     labels = ["raw_ell_0", "raw_outputscale", "raw_noise", "raw_offset"]
     for label, og, gg in zip(labels, grads_ours, gpt_grads):
-        print(f"  {label:16s}  ours={og:+.6f}  gpt={gg:+.6f}  |Δ|={abs(og - gg):.2e}")
+        print(f"  {label:16s}  ours={og:+.6f}  gpt={gg:+.6f}  |d|={abs(og - gg):.2e}")
 
 
 if __name__ == "__main__":

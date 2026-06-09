@@ -39,6 +39,8 @@ GP *gp_create(int dim, int cap, GPKernel *kernel, double noise)
     gp->cap    = cap;
     gp->X      = (double *)calloc((size_t)cap * dim, sizeof(double));
     gp->y      = (double *)calloc(cap, sizeof(double));
+    gp->L      = (double *)malloc((size_t)cap * cap * sizeof(double));
+    gp->alpha  = (double *)malloc((size_t)cap * sizeof(double));
     gp->kernel = kernel;
     gp_set_noise(gp, noise);
     return gp;
@@ -58,7 +60,7 @@ int gp_recompute(GP *gp)
     if (n == 0) return 0;
 
     double  sigma_n = gp_get_noise(gp);
-    double *K       = (double *)malloc((size_t)n * n * sizeof(double));
+    double *K       = gp->L;  // factor in place; L/alpha are cap-sized buffers
     gp->kernel->build_K(gp->kernel, gp->X, n, gp->dim, sigma_n, K);
 
     lapack_int info = LAPACKE_dpotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
@@ -66,11 +68,9 @@ int gp_recompute(GP *gp)
         gp->kernel->build_K(gp->kernel, gp->X, n, gp->dim, sigma_n, K);
         for (int i = 0; i < n; i++) K[i * n + i] += 1e-8;
         info = LAPACKE_dpotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
-        if (info != 0) { free(K); return -2; }
+        if (info != 0) return -2;
     }
     // dpotrf writes only the lower triangle; upper is ignored by dtrsv(CblasLower).
-    free(gp->L);     gp->L     = K;
-    free(gp->alpha); gp->alpha = (double *)malloc(n * sizeof(double));
     memcpy(gp->alpha, gp->y, n * sizeof(double));
     // alpha = L^-T L^-1 y  (two triangular solves)
     cblas_dtrsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit,
@@ -107,10 +107,10 @@ void gp_predict(const GP *gp, const double *Xs, double *means, double *vars, int
 {
     int n = gp->n;
     if (n == 0) {
-        double sigma_f = gp_kernel_get_outputscale(gp->kernel);
+        // prior: zero mean, k(x*, x*) variance
         for (int j = 0; j < m; j++) {
             means[j] = 0.0;
-            if (vars) vars[j] = sigma_f;
+            if (vars) vars[j] = gp->kernel->k_self(gp->kernel, &Xs[j * gp->dim], gp->dim);
         }
         return;
     }
@@ -214,7 +214,8 @@ static void kd_build(KDTree *t, int node, int lo, int hi)
         double mn = t->X[t->idx[lo] * t->dim + k], mx = mn;
         for (int i = lo + 1; i < hi; i++) {
             double v = t->X[t->idx[i] * t->dim + k];
-            if (v < mn) mn = v; if (v > mx) mx = v;
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
         }
         if (mx - mn > spread) { spread = mx - mn; best = k; }
     }
@@ -318,7 +319,7 @@ static GPKernel *cpu_kernel_from_tag(const char *tag, double *rp, int np)
 
 int gp_save(const GP *gp, const char *path)
 {
-    if (!gp->L || gp->n == 0) return -1;
+    if (gp->n == 0) return -1;
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
 
@@ -374,8 +375,6 @@ GP *gp_load(const char *path, int extra_cap)
         gp = gp_create(dim, cap, k, 1.0);
         gp->raw_noise = rn;
         gp->n         = n;
-        gp->L         = (double *)malloc((size_t)n * n * sizeof(double));
-        gp->alpha     = (double *)malloc(n * sizeof(double));
 
         RD(gp->X,     sizeof(double), (size_t)n * dim);
         RD(gp->y,     sizeof(double), n);

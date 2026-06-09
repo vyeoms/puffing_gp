@@ -29,7 +29,7 @@ struct GPCUKernel {
     void (*build_Ks)(const GPCUKernel *k, const double *d_Xtr, const double *d_Xte,
                      int n, int m, int d, double *d_Ks, cudaStream_t stream);
 
-    // Prior variance k(x, x) for each row of d_X (device, m×d row-major).
+    // Prior variance k(x, x) for each row of d_X (device, m x d row-major).
     void (*build_kself_batch)(const GPCUKernel *k, const double *d_X, int m, int d,
                                double *d_out, cudaStream_t stream);
 

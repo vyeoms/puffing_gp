@@ -24,8 +24,8 @@ typedef struct {
     int        dim, n, cap;
     double    *X;               // (cap x dim) row-major
     double    *y;               // (cap,)
-    double    *L;               // (n x n) lower Cholesky of K_y, row-major
-    double    *alpha;           // (n,) = K_y^-1 * y
+    double    *L;               // (cap x cap) buffer; leading n x n is lower Cholesky of K_y, row-major
+    double    *alpha;           // (cap,) buffer; leading n is K_y^-1 * y
     double     raw_noise;
     double     dedup_threshold; // near-duplicate filter; 0 = disabled
     GPKernel  *kernel;          // covariance kernel (owned by this struct)

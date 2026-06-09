@@ -143,12 +143,20 @@ __global__ void m32lin_k_dk_dell_d(
                        * exp(-sqrt(3.0) * sqrt(r2));
 }
 
+__global__ void m32lin_k_fill(double *v, int n, double val)
+{
+    int i = blockIdx.x * 256 + threadIdx.x;
+    if (i < n) v[i] = val;
+}
+
 // -- helpers ------------------------------------------------------------------
+// Scratch is stream-ordered (cudaMallocAsync/cudaFreeAsync): no device-wide
+// sync, and the launchers stay capturable in a CUDA graph.
 
 static double *h2d(const double *h, int n, cudaStream_t stream)
 {
     double *d;
-    CUDA_CHECK(cudaMalloc(&d, (size_t)n * sizeof(double)));
+    CUDA_CHECK(cudaMallocAsync(&d, (size_t)n * sizeof(double), stream));
     CUDA_CHECK(cudaMemcpyAsync(d, h, (size_t)n * sizeof(double),
                                cudaMemcpyHostToDevice, stream));
     return d;
@@ -175,7 +183,7 @@ static void m32lin_build_K(const GPCUKernel *k, const double *d_X, int n, int d,
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(n), gp_grid(n));
     m32lin_k_build_K<<<grid, block, 0, stream>>>(d_X, d_K, d_inv, n, d, sigma_f, sigma_n, offset);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaFree(d_inv));
+    CUDA_CHECK(cudaFreeAsync(d_inv, stream));
 }
 
 static void m32lin_build_Ks(const GPCUKernel *k, const double *d_Xtr, const double *d_Xte,
@@ -188,7 +196,7 @@ static void m32lin_build_Ks(const GPCUKernel *k, const double *d_Xtr, const doub
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(m), gp_grid(n));
     m32lin_k_build_Ks<<<grid, block, 0, stream>>>(d_Xtr, d_Xte, d_Ks, d_inv, n, m, d, sigma_f, offset);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaFree(d_inv));
+    CUDA_CHECK(cudaFreeAsync(d_inv, stream));
 }
 
 static double m32lin_k_self(const GPCUKernel *k, const double *x, int d)
@@ -237,9 +245,9 @@ static void m32lin_mll_grad(const GPCUKernel *k, const double *d_X, int n, int d
 
     double *d_inv  = device_inv_ells(k, d, stream);
     double *d_D, *d_W, *d_temp;
-    CUDA_CHECK(cudaMalloc(&d_D,    (size_t)n * n * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_W,    (size_t)n * n * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&d_temp, (size_t)n * n * sizeof(double)));
+    CUDA_CHECK(cudaMallocAsync(&d_D,    (size_t)n * n * sizeof(double), stream));
+    CUDA_CHECK(cudaMallocAsync(&d_W,    (size_t)n * n * sizeof(double), stream));
+    CUDA_CHECK(cudaMallocAsync(&d_temp, (size_t)n * n * sizeof(double), stream));
 
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(n), gp_grid(n));
 
@@ -273,27 +281,24 @@ static void m32lin_mll_grad(const GPCUKernel *k, const double *d_X, int n, int d
     // offset gradient: dK_ij/d(offset) = sigma_f => g_off = sigma_f * sum_{i,j} W_ij
     {
         double *d_ones, *d_wrow;
-        CUDA_CHECK(cudaMalloc(&d_ones, (size_t)n * sizeof(double)));
-        CUDA_CHECK(cudaMalloc(&d_wrow, (size_t)n * sizeof(double)));
-        double *h_ones = (double *)malloc(n * sizeof(double));
-        for (int i = 0; i < n; i++) h_ones[i] = 1.0;
-        CUDA_CHECK(cudaMemcpyAsync(d_ones, h_ones, (size_t)n * sizeof(double),
-                                   cudaMemcpyHostToDevice, stream));
-        free(h_ones);
+        CUDA_CHECK(cudaMallocAsync(&d_ones, (size_t)n * sizeof(double), stream));
+        CUDA_CHECK(cudaMallocAsync(&d_wrow, (size_t)n * sizeof(double), stream));
+        m32lin_k_fill<<<(n + 255) / 256, 256, 0, stream>>>(d_ones, n, 1.0);
+        CUDA_CHECK(cudaGetLastError());
         double w_sum;
         CUBLAS_CHECK(cublasDgemv(cublas, CUBLAS_OP_N, n, n,
                                  &one, d_W, n, d_ones, 1, &zero, d_wrow, 1));
         CUBLAS_CHECK(cublasDdot(cublas, n, d_wrow, 1, d_ones, 1, &w_sum));
         kernel_grads[OFF_IDX(np)] = 0.5 * sigma_f * w_sum
                                   * softplus_grad(k->raw_params[OFF_IDX(np)]);
-        CUDA_CHECK(cudaFree(d_ones));
-        CUDA_CHECK(cudaFree(d_wrow));
+        CUDA_CHECK(cudaFreeAsync(d_ones, stream));
+        CUDA_CHECK(cudaFreeAsync(d_wrow, stream));
     }
 
-    CUDA_CHECK(cudaFree(d_inv));
-    CUDA_CHECK(cudaFree(d_D));
-    CUDA_CHECK(cudaFree(d_W));
-    CUDA_CHECK(cudaFree(d_temp));
+    CUDA_CHECK(cudaFreeAsync(d_inv, stream));
+    CUDA_CHECK(cudaFreeAsync(d_D, stream));
+    CUDA_CHECK(cudaFreeAsync(d_W, stream));
+    CUDA_CHECK(cudaFreeAsync(d_temp, stream));
 }
 
 static void m32lin_destroy(GPCUKernel *k) { free(k); }

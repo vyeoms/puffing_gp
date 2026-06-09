@@ -30,12 +30,7 @@ CPU_LDFLAGS := $(BLAS_LIBS) -lm
 
 # CUDA flags
 
-NVCCFLAGS := -O3 -arch=native \
-             --generate-code arch=compute_70,code=sm_70 \
-             --generate-code arch=compute_80,code=sm_80 \
-             --generate-code arch=compute_86,code=sm_86 \
-             --generate-code arch=compute_89,code=sm_89 \
-             -std=c++14 \
+NVCCFLAGS := -O3 -arch=native --use_fast_math -std=c++14 \
              -Xcompiler -O3,-march=native
 
 CUDA_INC  := -I$(CUDA_ROOT)/include

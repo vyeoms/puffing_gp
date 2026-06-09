@@ -69,7 +69,7 @@ int main(int argc, char **argv)
 
     // CPU GP
     GP *gp = gp_create(dim, n,
-                       gp_kernel_matern32_linear(lengthscale, outputscale, offset),
+                       gp_kernel_matern32_linear(dim, lengthscale, outputscale, offset),
                        noise);
     gp_fit(gp, X, y, n);
 
@@ -78,24 +78,26 @@ int main(int argc, char **argv)
     gp_predict(gp, Xs, cpu_means, cpu_vars, m);
     double cpu_mll = gp_marginal_log_likelihood(gp);
 
+    // kernel grads: [0..dim-1]=ell, [dim]=sf, [dim+1]=offset
+    int np = dim + 2;
     double cpu_d_noise;
-    double cpu_kgrads[3];  // [LS, SF, OFF]
+    double *cpu_kgrads = (double *)malloc(np * sizeof(double));
     gp_mll_grad(gp, &cpu_d_noise, cpu_kgrads);
 
     // CUDA GP
     GPCU *gpcu = gpcu_create(dim, n,
-                             gpcu_kernel_matern32_linear(lengthscale, outputscale, offset),
+                             gpcu_kernel_matern32_linear(dim, lengthscale, outputscale, offset),
                              noise);
-    gpcu_fit(gpcu, X, y, n);
+    gpcu_fit(gpcu, X, y, n, 0);
 
     double *gpu_means = (double *)malloc(m * sizeof(double));
     double *gpu_vars  = (double *)malloc(m * sizeof(double));
-    gpcu_predict(gpcu, Xs, gpu_means, gpu_vars, m);
+    gpcu_predict(gpcu, Xs, gpu_means, gpu_vars, m, 0);
     double gpu_mll = gpcu_marginal_log_likelihood(gpcu);
 
     double gpu_d_noise;
-    double gpu_kgrads[3];
-    gpcu_mll_grad(gpcu, &gpu_d_noise, gpu_kgrads);
+    double *gpu_kgrads = (double *)malloc(np * sizeof(double));
+    gpcu_mll_grad(gpcu, &gpu_d_noise, gpu_kgrads, 0);
 
     // Comparison
     printf("Prediction errors (CPU vs CUDA):\n");
@@ -108,18 +110,22 @@ int main(int argc, char **argv)
     printf("  CUDA MLL = %.6f\n", gpu_mll);
 
     printf("\nGradients (should match CPU vs CUDA):\n");
+    for (int k = 0; k < dim; k++) {
+        char name[32];
+        snprintf(name, sizeof name, "d_raw_lengthscale[%d]", k);
+        printf("  %-28s  CPU = %+.6e   CUDA = %+.6e   |err| = %.3e\n",
+               name, cpu_kgrads[k], gpu_kgrads[k],
+               fabs(cpu_kgrads[k] - gpu_kgrads[k]));
+    }
     printf("  %-28s  CPU = %+.6e   CUDA = %+.6e   |err| = %.3e\n",
-           "d_raw_lengthscale", cpu_kgrads[0], gpu_kgrads[0],
-           fabs(cpu_kgrads[0] - gpu_kgrads[0]));
-    printf("  %-28s  CPU = %+.6e   CUDA = %+.6e   |err| = %.3e\n",
-           "d_raw_outputscale", cpu_kgrads[1], gpu_kgrads[1],
-           fabs(cpu_kgrads[1] - gpu_kgrads[1]));
+           "d_raw_outputscale", cpu_kgrads[np - 2], gpu_kgrads[np - 2],
+           fabs(cpu_kgrads[np - 2] - gpu_kgrads[np - 2]));
     printf("  %-28s  CPU = %+.6e   CUDA = %+.6e   |err| = %.3e\n",
            "d_raw_noise",       cpu_d_noise,   gpu_d_noise,
            fabs(cpu_d_noise    - gpu_d_noise));
     printf("  %-28s  CPU = %+.6e   CUDA = %+.6e   |err| = %.3e\n",
-           "d_raw_offset",      cpu_kgrads[2], gpu_kgrads[2],
-           fabs(cpu_kgrads[2] - gpu_kgrads[2]));
+           "d_raw_offset",      cpu_kgrads[np - 1], gpu_kgrads[np - 1],
+           fabs(cpu_kgrads[np - 1] - gpu_kgrads[np - 1]));
 
     // Save/load round-trip -- CPU
     gp_save(gp, "/tmp/gp_test.bin");
@@ -137,7 +143,7 @@ int main(int argc, char **argv)
     GPCU *gpcu2 = gpcu_load("/tmp/gpcu_test.bin", 0);
     double *rt2_means = (double *)malloc(m * sizeof(double));
     double *rt2_vars  = (double *)malloc(m * sizeof(double));
-    gpcu_predict(gpcu2, Xs, rt2_means, rt2_vars, m);
+    gpcu_predict(gpcu2, Xs, rt2_means, rt2_vars, m, 0);
     printf("\nSave/load round-trip (CUDA):\n");
     printf("  |mean_err|_inf  = %.3e\n", maxabsdiff(gpu_means, rt2_means, m));
     printf("  |var_err|_inf   = %.3e\n", maxabsdiff(gpu_vars,  rt2_vars,  m));
@@ -146,7 +152,7 @@ int main(int argc, char **argv)
     gp_destroy(gp);
     gpcu_destroy(gpcu);
     free(X); free(y); free(Xs);
-    free(cpu_means); free(cpu_vars);
-    free(gpu_means); free(gpu_vars);
+    free(cpu_means); free(cpu_vars); free(cpu_kgrads);
+    free(gpu_means); free(gpu_vars); free(gpu_kgrads);
     return 0;
 }

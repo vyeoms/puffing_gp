@@ -146,7 +146,7 @@ def run(n, dim=1):
     print(f"  {'':22s} (GPyTorch: exact Cholesky forced for n>800, errors vs GPyTorch)")
 
 if __name__ == "__main__":
-    sizes = [100]
+    sizes = [100, 200, 1000, 2000]
     dims  = [1, 5]
     if len(sys.argv) > 1:
         sizes = [int(s) for s in sys.argv[1:]]

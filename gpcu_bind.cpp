@@ -210,7 +210,8 @@ PYBIND11_MODULE(puffing_gpcu, m)
         .def("fit",       &PyGPCU::fit,       py::arg("X"), py::arg("y"))
         .def("recompute", &PyGPCU::recompute)
         .def("predict",   &PyGPCU::predict,   py::arg("X"), py::arg("noise") = false)
-        .def("mll_grad",  &PyGPCU::mll_grad)
+        .def("mll_grad",  &PyGPCU::mll_grad,
+             "Returns flat tuple (ell_0,...,ell_{dim-1}, sf, noise, offset) in raw param space")
 
         .def_property("lengthscale", &PyGPCU::lengthscale, &PyGPCU::set_lengthscale)
         .def_property("outputscale", &PyGPCU::outputscale, &PyGPCU::set_outputscale)
