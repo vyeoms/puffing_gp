@@ -18,27 +18,27 @@ extern "C" {
 typedef struct GPKernel GPKernel;
 struct GPKernel {
     int     n_params;    // number of unconstrained hyperparameters
-    double *raw_params;  // [n_params], unconstrained values
+    float *raw_params;  // [n_params], unconstrained values
     char    tag[4];      // 4-char type tag used by gp_save/gp_load ("M32L", etc.)
 
     // Build nxn covariance matrix K (row-major). Adds sigma_n to diagonal.
-    void (*build_K)(const GPKernel *k, const double *X, int n, int d,
-                    double sigma_n, double *K);
+    void (*build_K)(const GPKernel *k, const float *X, int n, int d,
+                    float sigma_n, float *K);
 
     // Build nxm cross-covariance Ks (row-major): k(X_train_i, X_test_j).
-    void (*build_Ks)(const GPKernel *k, const double *Xtr, const double *Xte,
-                     int n, int m, int d, double *Ks);
+    void (*build_Ks)(const GPKernel *k, const float *Xtr, const float *Xte,
+                     int n, int m, int d, float *Ks);
 
     // Prior variance k(x, x) for a single point x (length d).
-    double (*k_self)(const GPKernel *k, const double *x, int d);
+    float (*k_self)(const GPKernel *k, const float *x, int d);
 
     // Gradient of MLL w.r.t. each raw_params[i]:
     //   kernel_grads[i] = 0.5 * softplus_grad(raw_params[i])
     //                         * tr((alpha*alpha^T - Kinv) * dK/d(raw_params[i]))
     // Caller pre-zeroes kernel_grads[0..n_params-1] before calling.
     // alpha: (n,), Kinv: (nxn row-major, symmetric).
-    void (*mll_grad)(const GPKernel *k, const double *X, int n, int d,
-                     const double *alpha, const double *Kinv, double *kernel_grads);
+    void (*mll_grad)(const GPKernel *k, const float *X, int n, int d,
+                     const float *alpha, const float *Kinv, float *kernel_grads);
 
     void (*destroy)(GPKernel *k);
 };
@@ -57,16 +57,16 @@ struct GPKernel {
 //   n_params = dim + 2
 #define GP_KERNEL_TAG_MATERN32_LINEAR "M32L"
 
-GPKernel *gp_kernel_matern32_linear(int dim, double lengthscale, double outputscale,
-                                    double offset);
+GPKernel *gp_kernel_matern32_linear(int dim, float lengthscale, float outputscale,
+                                    float offset);
 
 // Named accessors for the Matern32+Linear kernel (softplus-constrained).
-double gp_kernel_get_lengthscale(const GPKernel *k, int d);
-double gp_kernel_get_outputscale(const GPKernel *k);
-double gp_kernel_get_offset     (const GPKernel *k);
-void   gp_kernel_set_lengthscale(GPKernel *k, int d, double v);
-void   gp_kernel_set_outputscale(GPKernel *k, double v);
-void   gp_kernel_set_offset     (GPKernel *k, double v);
+float gp_kernel_get_lengthscale(const GPKernel *k, int d);
+float gp_kernel_get_outputscale(const GPKernel *k);
+float gp_kernel_get_offset     (const GPKernel *k);
+void   gp_kernel_set_lengthscale(GPKernel *k, int d, float v);
+void   gp_kernel_set_outputscale(GPKernel *k, float v);
+void   gp_kernel_set_offset     (GPKernel *k, float v);
 
 #ifdef __cplusplus
 }

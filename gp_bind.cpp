@@ -10,7 +10,7 @@
 #include "gp_kernel.h"
 
 namespace py = pybind11;
-using arr_d = py::array_t<double, py::array::c_style | py::array::forcecast>;
+using arr_d = py::array_t<float, py::array::c_style | py::array::forcecast>;
 
 class PyGP {
     GP *gp_;
@@ -37,7 +37,7 @@ class PyGP {
 
 public:
     PyGP(int dim, int capacity,
-         double lengthscale, double outputscale, double noise, double offset)
+         float lengthscale, float outputscale, float noise, float offset)
         : gp_(gp_create(dim, capacity,
                         gp_kernel_matern32_linear(dim, lengthscale, outputscale, offset),
                         noise))
@@ -65,8 +65,8 @@ public:
         int n = check_X(xbuf, gp_->dim);
         if ((int)ybuf.shape[0] != n)
             throw std::invalid_argument("X and y length mismatch");
-        int rc = gp_fit(gp_, (const double *)xbuf.ptr,
-                             (const double *)ybuf.ptr, n);
+        int rc = gp_fit(gp_, (const float *)xbuf.ptr,
+                             (const float *)ybuf.ptr, n);
         if (rc == -1) throw std::runtime_error("n exceeds capacity");
         if (rc == -2) throw std::runtime_error("Cholesky factorisation failed");
     }
@@ -80,14 +80,14 @@ public:
         auto buf = X.request();
         int m = check_X(buf, gp_->dim);
 
-        auto means = py::array_t<double>(m);
-        auto vars  = py::array_t<double>(m);
-        gp_predict(gp_, (const double *)buf.ptr,
-                   (double *)means.request().ptr,
-                   (double *)vars.request().ptr, m);
+        auto means = py::array_t<float>(m);
+        auto vars  = py::array_t<float>(m);
+        gp_predict(gp_, (const float *)buf.ptr,
+                   (float *)means.request().ptr,
+                   (float *)vars.request().ptr, m);
         if (noise) {
-            double sn = gp_get_noise(gp_);
-            double *vp = (double *)vars.request().ptr;
+            float sn = gp_get_noise(gp_);
+            float *vp = (float *)vars.request().ptr;
             for (int i = 0; i < m; i++) vp[i] += sn;
         }
         return py::make_tuple(means, vars);
@@ -95,7 +95,7 @@ public:
 
     // log marginal likelihood + gradients
 
-    double log_marginal_likelihood() const {
+    float log_marginal_likelihood() const {
         check(); return gp_marginal_log_likelihood(gp_);
     }
 
@@ -104,8 +104,8 @@ public:
         check();
         int np = gp_->kernel->n_params;
         int d  = gp_->dim;
-        double d_raw_noise;
-        std::vector<double> kg((size_t)np);
+        float d_raw_noise;
+        std::vector<float> kg((size_t)np);
         gp_mll_grad(gp_, &d_raw_noise, kg.data());
         // kernel layout: [0..d-1]=ell, [np-2]=sf, [np-1]=offset
         py::list lst;
@@ -118,17 +118,17 @@ public:
 
     // constrained hyperparameters (arrays for lengthscale, scalars for rest)
 
-    py::array_t<double> lengthscale() const {
+    py::array_t<float> lengthscale() const {
         check();
         int d = gp_->dim;
-        py::array_t<double> res(d);
+        py::array_t<float> res(d);
         auto buf = res.mutable_unchecked<1>();
         for (int i = 0; i < d; i++) buf(i) = gp_kernel_get_lengthscale(gp_->kernel, i);
         return res;
     }
-    double outputscale() const { check(); return gp_kernel_get_outputscale(gp_->kernel); }
-    double noise()       const { check(); return gp_get_noise(gp_);                      }
-    double offset()      const { check(); return gp_kernel_get_offset(gp_->kernel);      }
+    float outputscale() const { check(); return gp_kernel_get_outputscale(gp_->kernel); }
+    float noise()       const { check(); return gp_get_noise(gp_);                      }
+    float offset()      const { check(); return gp_kernel_get_offset(gp_->kernel);      }
 
     void set_lengthscale(arr_d v) {
         check();
@@ -136,26 +136,26 @@ public:
         if ((int)buf.shape[0] != gp_->dim)
             throw std::invalid_argument(
                 "wrong lengthscale size: expected " + std::to_string(gp_->dim));
-        const double *p = (const double *)buf.ptr;
+        const float *p = (const float *)buf.ptr;
         for (int i = 0; i < gp_->dim; i++) gp_kernel_set_lengthscale(gp_->kernel, i, p[i]);
     }
-    void set_outputscale(double v) { check(); gp_kernel_set_outputscale(gp_->kernel, v); }
-    void set_noise      (double v) { check(); gp_set_noise(gp_, v);                      }
-    void set_offset     (double v) { check(); gp_kernel_set_offset(gp_->kernel, v);      }
+    void set_outputscale(float v) { check(); gp_kernel_set_outputscale(gp_->kernel, v); }
+    void set_noise      (float v) { check(); gp_set_noise(gp_, v);                      }
+    void set_offset     (float v) { check(); gp_kernel_set_offset(gp_->kernel, v);      }
 
     // raw (unconstrained) hyperparameters
 
-    py::array_t<double> raw_lengthscale() const {
+    py::array_t<float> raw_lengthscale() const {
         check();
         int d = gp_->dim;
-        py::array_t<double> res(d);
+        py::array_t<float> res(d);
         auto buf = res.mutable_unchecked<1>();
         for (int i = 0; i < d; i++) buf(i) = gp_->kernel->raw_params[i];
         return res;
     }
-    double raw_outputscale() const { check(); return gp_->kernel->raw_params[gp_->kernel->n_params - 2]; }
-    double raw_noise()       const { check(); return gp_->raw_noise; }
-    double raw_offset()      const { check(); return gp_->kernel->raw_params[gp_->kernel->n_params - 1]; }
+    float raw_outputscale() const { check(); return gp_->kernel->raw_params[gp_->kernel->n_params - 2]; }
+    float raw_noise()       const { check(); return gp_->raw_noise; }
+    float raw_offset()      const { check(); return gp_->kernel->raw_params[gp_->kernel->n_params - 1]; }
 
     void set_raw_lengthscale(arr_d v) {
         check();
@@ -163,20 +163,20 @@ public:
         if ((int)buf.shape[0] != gp_->dim)
             throw std::invalid_argument(
                 "wrong lengthscale size: expected " + std::to_string(gp_->dim));
-        const double *p = (const double *)buf.ptr;
+        const float *p = (const float *)buf.ptr;
         for (int i = 0; i < gp_->dim; i++) gp_->kernel->raw_params[i] = p[i];
     }
-    void set_raw_outputscale(double v) { check(); gp_->kernel->raw_params[gp_->kernel->n_params - 2] = v; }
-    void set_raw_noise      (double v) { check(); gp_->raw_noise = v; }
-    void set_raw_offset     (double v) { check(); gp_->kernel->raw_params[gp_->kernel->n_params - 1] = v; }
+    void set_raw_outputscale(float v) { check(); gp_->kernel->raw_params[gp_->kernel->n_params - 2] = v; }
+    void set_raw_noise      (float v) { check(); gp_->raw_noise = v; }
+    void set_raw_offset     (float v) { check(); gp_->kernel->raw_params[gp_->kernel->n_params - 1] = v; }
 
     // misc
 
     int    n()               const { check(); return gp_->n;                }
     int    dim()             const { check(); return gp_->dim;              }
     int    capacity()        const { check(); return gp_->cap;              }
-    double dedup_threshold() const { check(); return gp_->dedup_threshold;  }
-    void set_dedup_threshold(double v) { check(); gp_->dedup_threshold = v; }
+    float dedup_threshold() const { check(); return gp_->dedup_threshold;  }
+    void set_dedup_threshold(float v) { check(); gp_->dedup_threshold = v; }
 
     void save(const std::string &path) const {
         check();
@@ -198,7 +198,7 @@ PYBIND11_MODULE(puffing_gp, m)
     m.doc() = "GP regression -- CBLAS/LAPACK (C + pybind11)";
 
     py::class_<PyGP>(m, "GP")
-        .def(py::init<int, int, double, double, double, double>(),
+        .def(py::init<int, int, float, float, float, float>(),
              py::arg("dim"), py::arg("capacity"),
              py::arg("lengthscale") = 1.0,
              py::arg("outputscale") = 1.0,

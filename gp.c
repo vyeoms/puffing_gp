@@ -25,22 +25,22 @@
 #include <lapacke.h>
 
 #define SP_LB 1e-4
-static inline double softplus     (double x)   { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
-static inline double inv_softplus (double x)   { double v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
-static inline double softplus_grad(double raw) { return 1.0 / (1.0 + exp(-raw)); }
+static inline float softplus     (float x)   { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
+static inline float inv_softplus (float x)   { float v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
+static inline float softplus_grad(float raw) { return 1.0 / (1.0 + exp(-raw)); }
 
-double gp_get_noise(const GP *gp) { return softplus(gp->raw_noise);   }
-void   gp_set_noise(GP *gp, double v) { gp->raw_noise = inv_softplus(v); }
+float gp_get_noise(const GP *gp) { return softplus(gp->raw_noise);   }
+void   gp_set_noise(GP *gp, float v) { gp->raw_noise = inv_softplus(v); }
 
-GP *gp_create(int dim, int cap, GPKernel *kernel, double noise)
+GP *gp_create(int dim, int cap, GPKernel *kernel, float noise)
 {
     GP *gp     = (GP *)calloc(1, sizeof(GP));
     gp->dim    = dim;
     gp->cap    = cap;
-    gp->X      = (double *)calloc((size_t)cap * dim, sizeof(double));
-    gp->y      = (double *)calloc(cap, sizeof(double));
-    gp->L      = (double *)malloc((size_t)cap * cap * sizeof(double));
-    gp->alpha  = (double *)malloc((size_t)cap * sizeof(double));
+    gp->X      = (float *)calloc((size_t)cap * dim, sizeof(float));
+    gp->y      = (float *)calloc(cap, sizeof(float));
+    gp->L      = (float *)malloc((size_t)cap * cap * sizeof(float));
+    gp->alpha  = (float *)malloc((size_t)cap * sizeof(float));
     gp->kernel = kernel;
     gp_set_noise(gp, noise);
     return gp;
@@ -59,28 +59,28 @@ int gp_recompute(GP *gp)
     int n = gp->n;
     if (n == 0) return 0;
 
-    double  sigma_n = gp_get_noise(gp);
-    double *K       = gp->L;  // factor in place; L/alpha are cap-sized buffers
+    float  sigma_n = gp_get_noise(gp);
+    float *K       = gp->L;  // factor in place; L/alpha are cap-sized buffers
     gp->kernel->build_K(gp->kernel, gp->X, n, gp->dim, sigma_n, K);
 
-    lapack_int info = LAPACKE_dpotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
+    lapack_int info = LAPACKE_spotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
     if (info != 0) {
         gp->kernel->build_K(gp->kernel, gp->X, n, gp->dim, sigma_n, K);
         for (int i = 0; i < n; i++) K[i * n + i] += 1e-8;
-        info = LAPACKE_dpotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
+        info = LAPACKE_spotrf(LAPACK_ROW_MAJOR, 'L', n, K, n);
         if (info != 0) return -2;
     }
     // dpotrf writes only the lower triangle; upper is ignored by dtrsv(CblasLower).
-    memcpy(gp->alpha, gp->y, n * sizeof(double));
+    memcpy(gp->alpha, gp->y, n * sizeof(float));
     // alpha = L^-T L^-1 y  (two triangular solves)
-    cblas_dtrsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit,
+    cblas_strsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit,
                 n, gp->L, n, gp->alpha, 1);
-    cblas_dtrsv(CblasRowMajor, CblasLower, CblasTrans, CblasNonUnit,
+    cblas_strsv(CblasRowMajor, CblasLower, CblasTrans, CblasNonUnit,
                 n, gp->L, n, gp->alpha, 1);
     return 0;
 }
 
-int gp_fit(GP *gp, const double *X, const double *y, int n)
+int gp_fit(GP *gp, const float *X, const float *y, int n)
 {
     if (n > gp->cap) return -1;
 
@@ -90,20 +90,20 @@ int gp_fit(GP *gp, const double *X, const double *y, int n)
                                                 gp->dedup_threshold, idx);
         for (int i = 0; i < n_kept; i++) {
             memcpy(&gp->X[i * gp->dim], &X[idx[i] * gp->dim],
-                   gp->dim * sizeof(double));
+                   gp->dim * sizeof(float));
             gp->y[i] = y[idx[i]];
         }
         free(idx);
         gp->n = n_kept;
     } else {
-        memcpy(gp->X, X, (size_t)n * gp->dim * sizeof(double));
-        memcpy(gp->y, y, (size_t)n * sizeof(double));
+        memcpy(gp->X, X, (size_t)n * gp->dim * sizeof(float));
+        memcpy(gp->y, y, (size_t)n * sizeof(float));
         gp->n = n;
     }
     return gp_recompute(gp);
 }
 
-void gp_predict(const GP *gp, const double *Xs, double *means, double *vars, int m)
+void gp_predict(const GP *gp, const float *Xs, float *means, float *vars, int m)
 {
     int n = gp->n;
     if (n == 0) {
@@ -115,11 +115,11 @@ void gp_predict(const GP *gp, const double *Xs, double *means, double *vars, int
         return;
     }
 
-    double *Ks = (double *)malloc((size_t)n * m * sizeof(double));
+    float *Ks = (float *)malloc((size_t)n * m * sizeof(float));
     gp->kernel->build_Ks(gp->kernel, gp->X, Xs, n, m, gp->dim, Ks);
 
     // means = Ks^T alpha
-    cblas_dgemv(CblasRowMajor, CblasTrans,
+    cblas_sgemv(CblasRowMajor, CblasTrans,
                 n, m, 1.0, Ks, m, gp->alpha, 1, 0.0, means, 1);
 
     if (vars) {
@@ -128,29 +128,29 @@ void gp_predict(const GP *gp, const double *Xs, double *means, double *vars, int
             vars[j] = gp->kernel->k_self(gp->kernel, &Xs[j * gp->dim], gp->dim);
 
         // posterior: var[j] = k(x*,x*) - ||L^-1 Ks_j||^2
-        cblas_dtrsm(CblasRowMajor, CblasLeft, CblasLower,
+        cblas_strsm(CblasRowMajor, CblasLeft, CblasLower,
                     CblasNoTrans, CblasNonUnit,
                     n, m, 1.0, gp->L, n, Ks, m);
         for (int j = 0; j < m; j++) {
-            double v = vars[j] - cblas_ddot(n, Ks + j, m, Ks + j, m);
+            float v = vars[j] - cblas_sdot(n, Ks + j, m, Ks + j, m);
             vars[j] = v > 0.0 ? v : 0.0;
         }
     }
     free(Ks);
 }
 
-double gp_marginal_log_likelihood(const GP *gp)
+float gp_marginal_log_likelihood(const GP *gp)
 {
     int n = gp->n;
     if (n == 0) return 0.0;
-    double log_det = 0.0;
+    float log_det = 0.0;
     for (int i = 0; i < n; i++) log_det += log(gp->L[i * n + i]);
-    return (-0.5 * cblas_ddot(n, gp->y, 1, gp->alpha, 1)
+    return (-0.5 * cblas_sdot(n, gp->y, 1, gp->alpha, 1)
             - log_det
             - 0.5 * n * log(2.0 * M_PI)) / n;
 }
 
-void gp_mll_grad(const GP *gp, double *d_raw_noise, double *kernel_grads)
+void gp_mll_grad(const GP *gp, float *d_raw_noise, float *kernel_grads)
 {
     int n = gp->n;
     if (n == 0) {
@@ -161,16 +161,16 @@ void gp_mll_grad(const GP *gp, double *d_raw_noise, double *kernel_grads)
     }
 
     // K^-1 via dpotri on a copy of L; dpotri fills only the lower triangle
-    double *Kinv = (double *)malloc((size_t)n * n * sizeof(double));
-    memcpy(Kinv, gp->L, (size_t)n * n * sizeof(double));
-    LAPACKE_dpotri(LAPACK_ROW_MAJOR, 'L', n, Kinv, n);
+    float *Kinv = (float *)malloc((size_t)n * n * sizeof(float));
+    memcpy(Kinv, gp->L, (size_t)n * n * sizeof(float));
+    LAPACKE_spotri(LAPACK_ROW_MAJOR, 'L', n, Kinv, n);
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++)
             Kinv[i * n + j] = Kinv[j * n + i];
 
     // Noise gradient: dK/d(sigma_n) = I, so tr((alpha*alpha^T - Kinv)*I) = ||alpha||^2 - tr(Kinv)
     if (d_raw_noise) {
-        double g_n = 0.0;
+        float g_n = 0.0;
         for (int i = 0; i < n; i++)
             g_n += gp->alpha[i] * gp->alpha[i] - Kinv[i * n + i];
         *d_raw_noise = 0.5 * g_n * softplus_grad(gp->raw_noise) / n;
@@ -190,16 +190,16 @@ void gp_mll_grad(const GP *gp, double *d_raw_noise, double *kernel_grads)
 
 #define KD_LEAF 16
 
-typedef struct { int lo, hi, left, right, split_dim; double split_val; } KDNode;
-typedef struct { const double *X; int n, dim, n_nodes; int *idx; KDNode *nodes; } KDTree;
+typedef struct { int lo, hi, left, right, split_dim; float split_val; } KDNode;
+typedef struct { const float *X; int n, dim, n_nodes; int *idx; KDNode *nodes; } KDTree;
 
 static int          g_kd_split_dim, g_kd_d;
-static const double *g_kd_X;
+static const float *g_kd_X;
 
 static int kd_cmp_fn(const void *a, const void *b)
 {
-    double va = g_kd_X[*(const int *)a * g_kd_d + g_kd_split_dim];
-    double vb = g_kd_X[*(const int *)b * g_kd_d + g_kd_split_dim];
+    float va = g_kd_X[*(const int *)a * g_kd_d + g_kd_split_dim];
+    float vb = g_kd_X[*(const int *)b * g_kd_d + g_kd_split_dim];
     return (va > vb) - (va < vb);
 }
 
@@ -209,11 +209,11 @@ static void kd_build(KDTree *t, int node, int lo, int hi)
     nd->lo = lo; nd->hi = hi; nd->left = nd->right = -1; nd->split_dim = -1;
     if (hi - lo <= KD_LEAF) return;
 
-    int best = 0; double spread = -1.0;
+    int best = 0; float spread = -1.0;
     for (int k = 0; k < t->dim; k++) {
-        double mn = t->X[t->idx[lo] * t->dim + k], mx = mn;
+        float mn = t->X[t->idx[lo] * t->dim + k], mx = mn;
         for (int i = lo + 1; i < hi; i++) {
-            double v = t->X[t->idx[i] * t->dim + k];
+            float v = t->X[t->idx[i] * t->dim + k];
             if (v < mn) mn = v;
             if (v > mx) mx = v;
         }
@@ -230,7 +230,7 @@ static void kd_build(KDTree *t, int node, int lo, int hi)
     kd_build(t, rn, mid, hi);
 }
 
-static KDTree kd_create(const double *X, int n, int dim)
+static KDTree kd_create(const float *X, int n, int dim)
 {
     KDTree t;
     t.X = X; t.n = n; t.dim = dim; t.n_nodes = 1;
@@ -243,27 +243,27 @@ static KDTree kd_create(const double *X, int n, int dim)
 
 static void kd_destroy(KDTree *t) { free(t->idx); free(t->nodes); }
 
-static void kd_query_ball(const KDTree *t, int node, const double *q,
-                           double r, double r2, int *out, int *cnt)
+static void kd_query_ball(const KDTree *t, int node, const float *q,
+                           float r, float r2, int *out, int *cnt)
 {
     const KDNode *nd = &t->nodes[node];
     if (nd->split_dim < 0) {
         for (int i = nd->lo; i < nd->hi; i++) {
-            int p = t->idx[i]; double sq = 0.0;
+            int p = t->idx[i]; float sq = 0.0;
             for (int k = 0; k < t->dim; k++) {
-                double df = q[k] - t->X[p * t->dim + k]; sq += df * df;
+                float df = q[k] - t->X[p * t->dim + k]; sq += df * df;
             }
             if (sq <= r2) out[(*cnt)++] = p;
         }
         return;
     }
-    double dv = q[nd->split_dim] - nd->split_val;
+    float dv = q[nd->split_dim] - nd->split_val;
     if (nd->left  >= 0 && dv <=  r) kd_query_ball(t, nd->left,  q, r, r2, out, cnt);
     if (nd->right >= 0 && dv >= -r) kd_query_ball(t, nd->right, q, r, r2, out, cnt);
 }
 
-int gp_filter_near_duplicates(const double *X, int n, int dim,
-                               double threshold, int *kept_indices)
+int gp_filter_near_duplicates(const float *X, int n, int dim,
+                               float threshold, int *kept_indices)
 {
     if (n <= 0) return 0;
     if (n == 1) { kept_indices[0] = 0; return 1; }
@@ -271,7 +271,7 @@ int gp_filter_near_duplicates(const double *X, int n, int dim,
     KDTree tree   = kd_create(X, n, dim);
     int   *keep   = (int *)malloc(n * sizeof(int));
     int   *nearby = (int *)malloc(n * sizeof(int));
-    double r2     = threshold * threshold;
+    float r2     = threshold * threshold;
     for (int i = 0; i < n; i++) keep[i] = 1;
 
     for (int i = n - 1; i >= 0; i--) {
@@ -292,13 +292,13 @@ int gp_filter_near_duplicates(const double *X, int n, int dim,
 
 // -- kernel registry for gp_load ----------------------------------------------
 
-typedef struct { const char *tag; GPKernel *(*make)(double *, int); } KernelFactory;
+typedef struct { const char *tag; GPKernel *(*make)(float *, int); } KernelFactory;
 
-static GPKernel *kf_m32lin(double *rp, int np)
+static GPKernel *kf_m32lin(float *rp, int np)
 {
     int dim = np - 2;
     GPKernel *k = gp_kernel_matern32_linear(dim, 1.0, 1.0, 1.0);
-    memcpy(k->raw_params, rp, (size_t)np * sizeof(double));
+    memcpy(k->raw_params, rp, (size_t)np * sizeof(float));
     return k;
 }
 
@@ -307,7 +307,7 @@ static const KernelFactory cpu_kernel_registry[] = {
     { NULL, NULL }
 };
 
-static GPKernel *cpu_kernel_from_tag(const char *tag, double *rp, int np)
+static GPKernel *cpu_kernel_from_tag(const char *tag, float *rp, int np)
 {
     for (int i = 0; cpu_kernel_registry[i].tag; i++)
         if (memcmp(tag, cpu_kernel_registry[i].tag, 4) == 0)
@@ -327,14 +327,14 @@ int gp_save(const GP *gp, const char *path)
     fwrite("GP04",                  1,              4,  f);
     fwrite(&dim,                    sizeof dim,     1,  f);
     fwrite(&n,                      sizeof n,       1,  f);
-    fwrite(&gp->raw_noise,          sizeof(double), 1,  f);
+    fwrite(&gp->raw_noise,          sizeof(float), 1,  f);
     fwrite(gp->kernel->tag,         1,              4,  f);
     fwrite(&np,                     sizeof np,      1,  f);
-    fwrite(gp->kernel->raw_params,  sizeof(double), np, f);
-    fwrite(gp->X,     sizeof(double), (size_t)n * dim, f);
-    fwrite(gp->y,     sizeof(double), n,               f);
-    fwrite(gp->L,     sizeof(double), (size_t)n * n,   f);
-    fwrite(gp->alpha, sizeof(double), n,               f);
+    fwrite(gp->kernel->raw_params,  sizeof(float), np, f);
+    fwrite(gp->X,     sizeof(float), (size_t)n * dim, f);
+    fwrite(gp->y,     sizeof(float), n,               f);
+    fwrite(gp->L,     sizeof(float), (size_t)n * n,   f);
+    fwrite(gp->alpha, sizeof(float), n,               f);
 
     fclose(f);
     return 0;
@@ -352,20 +352,20 @@ GP *gp_load(const char *path, int extra_cap)
     do {
         char    magic[4], ktag[4];
         int32_t dim, n, np;
-        double  rn;
+        float  rn;
 
         RD(magic, 1, 4);
         if (memcmp(magic, "GP04", 4) != 0) break;
 
         RD(&dim,  sizeof dim, 1);
         RD(&n,    sizeof n,   1);
-        RD(&rn,   sizeof(double), 1);
+        RD(&rn,   sizeof(float), 1);
         RD(ktag,  1, 4);
         RD(&np,   sizeof np, 1);
 
-        double *rp = (double *)malloc((size_t)np * sizeof(double));
+        float *rp = (float *)malloc((size_t)np * sizeof(float));
         if (!rp) break;
-        if (fread(rp, sizeof(double), np, f) != (size_t)np) { free(rp); break; }
+        if (fread(rp, sizeof(float), np, f) != (size_t)np) { free(rp); break; }
 
         GPKernel *k = cpu_kernel_from_tag(ktag, rp, np);
         free(rp);
@@ -376,10 +376,10 @@ GP *gp_load(const char *path, int extra_cap)
         gp->raw_noise = rn;
         gp->n         = n;
 
-        RD(gp->X,     sizeof(double), (size_t)n * dim);
-        RD(gp->y,     sizeof(double), n);
-        RD(gp->L,     sizeof(double), (size_t)n * n);
-        RD(gp->alpha, sizeof(double), n);
+        RD(gp->X,     sizeof(float), (size_t)n * dim);
+        RD(gp->y,     sizeof(float), n);
+        RD(gp->L,     sizeof(float), (size_t)n * n);
+        RD(gp->alpha, sizeof(float), n);
 
         fclose(f);
         return gp;

@@ -54,66 +54,66 @@
 } while (0)
 
 #define SP_LB 1e-4
-static inline double softplus     (double x)   { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
-static inline double inv_softplus (double x)   { double v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
-static inline double softplus_grad(double raw) { return 1.0 / (1.0 + exp(-raw)); }
+static inline float softplus     (float x)   { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
+static inline float inv_softplus (float x)   { float v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
+static inline float softplus_grad(float raw) { return 1.0 / (1.0 + exp(-raw)); }
 
 // -- utility device kernels ---------------------------------------------------
 // (Covariance kernels live in gp_cuda_kernel.cu)
 
 // Add val to the diagonal of a column-major nxn matrix on device
-__global__ void gpcu_k_add_diag(double *A, int n, double val)
+__global__ void gpcu_k_add_diag(float *A, int n, float val)
 {
     int i = blockIdx.x * 256 + threadIdx.x;
     if (i < n) A[(size_t)i * (n + 1)] += val;
 }
 
 // Copy diagonal of a column-major nxn matrix to a flat device vector
-__global__ void gpcu_k_extract_diag(const double *A, double *d, int n)
+__global__ void gpcu_k_extract_diag(const float *A, float *d, int n)
 {
     int i = blockIdx.x * 256 + threadIdx.x;
     if (i < n) d[i] = A[(size_t)i * (n + 1)];
 }
 
 // Per-column squared norms of a column-major nxm matrix
-__global__ void gpcu_k_col_sqnorms(const double *V, double *sqnorms, int n, int m)
+__global__ void gpcu_k_col_sqnorms(const float *V, float *sqnorms, int n, int m)
 {
     int j = blockIdx.x * 256 + threadIdx.x;
     if (j >= m) return;
-    double sq = 0.0;
-    const double *col = V + (size_t)j * n;
+    float sq = 0.0;
+    const float *col = V + (size_t)j * n;
     for (int i = 0; i < n; i++) sq += col[i] * col[i];
     sqnorms[j] = sq;
 }
 
 // Subtract per-column squared norms from variance vector and clamp to zero
-__global__ void gpcu_k_var_subtract(double *vars, const double *sqnorms, int m)
+__global__ void gpcu_k_var_subtract(float *vars, const float *sqnorms, int m)
 {
     int j = blockIdx.x * 256 + threadIdx.x;
     if (j >= m) return;
-    double v = vars[j] - sqnorms[j];
+    float v = vars[j] - sqnorms[j];
     vars[j] = v > 0.0 ? v : 0.0;
 }
 
 // float32 <-> float64 cast (device-to-device)
-__global__ void gpcu_k_f2d(const float *src, double *dst, int n)
+__global__ void gpcu_k_f2d(const float *src, float *dst, int n)
 {
     int i = blockIdx.x * 256 + threadIdx.x;
-    if (i < n) dst[i] = (double)src[i];
+    if (i < n) dst[i] = (float)src[i];
 }
-__global__ void gpcu_k_d2f(const double *src, float *dst, int n)
+__global__ void gpcu_k_d2f(const float *src, float *dst, int n)
 {
     int i = blockIdx.x * 256 + threadIdx.x;
     if (i < n) dst[i] = (float)src[i];
 }
 
-void gpcu_cast_f2d(const float *src, double *dst, int n, cudaStream_t stream)
+void gpcu_cast_f2d(const float *src, float *dst, int n, cudaStream_t stream)
 {
     gpcu_k_f2d<<<(n + 255) / 256, 256, 0, stream>>>(src, dst, n);
     CUDA_CHECK(cudaGetLastError());
 }
 
-void gpcu_cast_d2f(const double *src, float *dst, int n, cudaStream_t stream)
+void gpcu_cast_d2f(const float *src, float *dst, int n, cudaStream_t stream)
 {
     gpcu_k_d2f<<<(n + 255) / 256, 256, 0, stream>>>(src, dst, n);
     CUDA_CHECK(cudaGetLastError());
@@ -124,16 +124,16 @@ void gpcu_cast_d2f(const double *src, float *dst, int n, cudaStream_t stream)
 
 #define KD_LEAF 16
 
-typedef struct { int lo, hi, left, right, split_dim; double split_val; } KDNode;
-typedef struct { const double *X; int n, dim, n_nodes; int *idx; KDNode *nodes; } KDTree;
+typedef struct { int lo, hi, left, right, split_dim; float split_val; } KDNode;
+typedef struct { const float *X; int n, dim, n_nodes; int *idx; KDNode *nodes; } KDTree;
 
 static int          g_kd_split_dim, g_kd_d;
-static const double *g_kd_X;
+static const float *g_kd_X;
 
 static int kd_cmp_fn(const void *a, const void *b)
 {
-    double va = g_kd_X[*(const int *)a * g_kd_d + g_kd_split_dim];
-    double vb = g_kd_X[*(const int *)b * g_kd_d + g_kd_split_dim];
+    float va = g_kd_X[*(const int *)a * g_kd_d + g_kd_split_dim];
+    float vb = g_kd_X[*(const int *)b * g_kd_d + g_kd_split_dim];
     return (va > vb) - (va < vb);
 }
 
@@ -143,11 +143,11 @@ static void kd_build(KDTree *t, int node, int lo, int hi)
     nd->lo = lo; nd->hi = hi; nd->left = nd->right = -1; nd->split_dim = -1;
     if (hi - lo <= KD_LEAF) return;
 
-    int best = 0; double spread = -1.0;
+    int best = 0; float spread = -1.0;
     for (int k = 0; k < t->dim; k++) {
-        double mn = t->X[t->idx[lo] * t->dim + k], mx = mn;
+        float mn = t->X[t->idx[lo] * t->dim + k], mx = mn;
         for (int i = lo + 1; i < hi; i++) {
-            double v = t->X[t->idx[i] * t->dim + k];
+            float v = t->X[t->idx[i] * t->dim + k];
             if (v < mn) mn = v;
             if (v > mx) mx = v;
         }
@@ -164,7 +164,7 @@ static void kd_build(KDTree *t, int node, int lo, int hi)
     kd_build(t, rn, mid, hi);
 }
 
-static KDTree kd_create(const double *X, int n, int dim)
+static KDTree kd_create(const float *X, int n, int dim)
 {
     KDTree t;
     t.X = X; t.n = n; t.dim = dim; t.n_nodes = 1;
@@ -177,27 +177,27 @@ static KDTree kd_create(const double *X, int n, int dim)
 
 static void kd_destroy(KDTree *t) { free(t->idx); free(t->nodes); }
 
-static void kd_query_ball(const KDTree *t, int node, const double *q,
-                           double r, double r2, int *out, int *cnt)
+static void kd_query_ball(const KDTree *t, int node, const float *q,
+                           float r, float r2, int *out, int *cnt)
 {
     const KDNode *nd = &t->nodes[node];
     if (nd->split_dim < 0) {
         for (int i = nd->lo; i < nd->hi; i++) {
-            int p = t->idx[i]; double sq = 0.0;
+            int p = t->idx[i]; float sq = 0.0;
             for (int k = 0; k < t->dim; k++) {
-                double df = q[k] - t->X[p * t->dim + k]; sq += df * df;
+                float df = q[k] - t->X[p * t->dim + k]; sq += df * df;
             }
             if (sq <= r2) out[(*cnt)++] = p;
         }
         return;
     }
-    double dv = q[nd->split_dim] - nd->split_val;
+    float dv = q[nd->split_dim] - nd->split_val;
     if (nd->left  >= 0 && dv <=  r) kd_query_ball(t, nd->left,  q, r, r2, out, cnt);
     if (nd->right >= 0 && dv >= -r) kd_query_ball(t, nd->right, q, r, r2, out, cnt);
 }
 
-static int gpcu_filter_near_duplicates(const double *X, int n, int dim,
-                                        double threshold, int *kept_indices)
+static int gpcu_filter_near_duplicates(const float *X, int n, int dim,
+                                        float threshold, int *kept_indices)
 {
     if (n <= 0) return 0;
     if (n == 1) { kept_indices[0] = 0; return 1; }
@@ -205,7 +205,7 @@ static int gpcu_filter_near_duplicates(const double *X, int n, int dim,
     KDTree tree   = kd_create(X, n, dim);
     int   *keep   = (int *)malloc(n * sizeof(int));
     int   *nearby = (int *)malloc(n * sizeof(int));
-    double r2     = threshold * threshold;
+    float r2     = threshold * threshold;
     for (int i = 0; i < n; i++) keep[i] = 1;
 
     for (int i = n - 1; i >= 0; i--) {
@@ -226,22 +226,22 @@ static int gpcu_filter_near_duplicates(const double *X, int n, int dim,
 
 // -- hyperparameter access ----------------------------------------------------
 
-double gpcu_get_noise(const GPCU *gp) { return softplus(gp->raw_noise);   }
-void   gpcu_set_noise(GPCU *gp, double v) { gp->raw_noise = inv_softplus(v); }
+float gpcu_get_noise(const GPCU *gp) { return softplus(gp->raw_noise);   }
+void   gpcu_set_noise(GPCU *gp, float v) { gp->raw_noise = inv_softplus(v); }
 
 // -- lifecycle ----------------------------------------------------------------
 
-GPCU *gpcu_create(int dim, int cap, GPCUKernel *kernel, double noise)
+GPCU *gpcu_create(int dim, int cap, GPCUKernel *kernel, float noise)
 {
     GPCU *gp  = (GPCU *)calloc(1, sizeof(GPCU));
     gp->dim   = dim;
     gp->cap   = cap;
     gp->kernel = kernel;
     gpcu_set_noise(gp, noise);
-    CUDA_CHECK(cudaMalloc(&gp->d_X,     (size_t)cap * dim * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&gp->d_y,     (size_t)cap       * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&gp->d_L,     (size_t)cap * cap * sizeof(double)));
-    CUDA_CHECK(cudaMalloc(&gp->d_alpha, (size_t)cap       * sizeof(double)));
+    CUDA_CHECK(cudaMalloc(&gp->d_X,     (size_t)cap * dim * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&gp->d_y,     (size_t)cap       * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&gp->d_L,     (size_t)cap * cap * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&gp->d_alpha, (size_t)cap       * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&gp->d_info,  sizeof(int)));
     CUBLAS_CHECK  (cublasCreate    (&gp->cublas));
     CUSOLVER_CHECK(cusolverDnCreate(&gp->cusolver));
@@ -264,18 +264,18 @@ void gpcu_destroy(GPCU *gp)
 
 // Cholesky factorisation of d_K in-place; returns cuSOLVER info (0 = success).
 // Workspace persists in the GPCU struct and only grows.
-static int run_potrf(GPCU *gp, double *d_K, int n, cudaStream_t stream)
+static int run_potrf(GPCU *gp, float *d_K, int n, cudaStream_t stream)
 {
     CUSOLVER_CHECK(cusolverDnSetStream(gp->cusolver, stream));
     int lwork = 0;
-    CUSOLVER_CHECK(cusolverDnDpotrf_bufferSize(
+    CUSOLVER_CHECK(cusolverDnSpotrf_bufferSize(
         gp->cusolver, CUBLAS_FILL_MODE_LOWER, n, d_K, n, &lwork));
     if (lwork > gp->lwork) {
         cudaFree(gp->d_work);
-        CUDA_CHECK(cudaMalloc(&gp->d_work, (size_t)lwork * sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&gp->d_work, (size_t)lwork * sizeof(float)));
         gp->lwork = lwork;
     }
-    CUSOLVER_CHECK(cusolverDnDpotrf(
+    CUSOLVER_CHECK(cusolverDnSpotrf(
         gp->cusolver, CUBLAS_FILL_MODE_LOWER, n, d_K, n,
         gp->d_work, gp->lwork, gp->d_info));
 
@@ -288,14 +288,14 @@ static int run_potrf(GPCU *gp, double *d_K, int n, cudaStream_t stream)
 }
 
 // alpha = K^-1 y via two triangular solves (d_alpha pre-filled with y).
-static void solve_alpha(GPCU *gp, const double *d_L, int n, double *d_alpha,
+static void solve_alpha(GPCU *gp, const float *d_L, int n, float *d_alpha,
                         cudaStream_t stream)
 {
     CUBLAS_CHECK(cublasSetStream(gp->cublas, stream));
-    CUBLAS_CHECK(cublasDtrsv(gp->cublas,
+    CUBLAS_CHECK(cublasStrsv(gp->cublas,
         CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT,
         n, d_L, n, d_alpha, 1));
-    CUBLAS_CHECK(cublasDtrsv(gp->cublas,
+    CUBLAS_CHECK(cublasStrsv(gp->cublas,
         CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_T, CUBLAS_DIAG_NON_UNIT,
         n, d_L, n, d_alpha, 1));
 }
@@ -319,12 +319,12 @@ int gpcu_recompute(GPCU *gp, cudaStream_t stream)
     }
 
     CUDA_CHECK(cudaMemcpyAsync(gp->d_alpha, gp->d_y,
-                               (size_t)n * sizeof(double), cudaMemcpyDeviceToDevice, stream));
+                               (size_t)n * sizeof(float), cudaMemcpyDeviceToDevice, stream));
     solve_alpha(gp, gp->d_L, n, gp->d_alpha, stream);
     return 0;
 }
 
-int gpcu_fit(GPCU *gp, const double *X, const double *y, int n, cudaStream_t stream)
+int gpcu_fit(GPCU *gp, const float *X, const float *y, int n, cudaStream_t stream)
 {
     if (n > gp->cap) return -1;
 
@@ -332,65 +332,65 @@ int gpcu_fit(GPCU *gp, const double *X, const double *y, int n, cudaStream_t str
         int    *idx    = (int *)malloc(n * sizeof(int));
         int     n_kept = gpcu_filter_near_duplicates(X, n, gp->dim,
                                                    gp->dedup_threshold, idx);
-        double *X_c    = (double *)malloc((size_t)n_kept * gp->dim * sizeof(double));
-        double *y_c    = (double *)malloc((size_t)n_kept * sizeof(double));
+        float *X_c    = (float *)malloc((size_t)n_kept * gp->dim * sizeof(float));
+        float *y_c    = (float *)malloc((size_t)n_kept * sizeof(float));
         for (int i = 0; i < n_kept; i++) {
             memcpy(&X_c[i * gp->dim], &X[idx[i] * gp->dim],
-                   gp->dim * sizeof(double));
+                   gp->dim * sizeof(float));
             y_c[i] = y[idx[i]];
         }
         free(idx);
         CUDA_CHECK(cudaMemcpyAsync(gp->d_X, X_c,
-                                   (size_t)n_kept * gp->dim * sizeof(double),
+                                   (size_t)n_kept * gp->dim * sizeof(float),
                                    cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(gp->d_y, y_c,
-                                   (size_t)n_kept * sizeof(double),
+                                   (size_t)n_kept * sizeof(float),
                                    cudaMemcpyHostToDevice, stream));
         free(X_c); free(y_c);
         gp->n = n_kept;
     } else {
         CUDA_CHECK(cudaMemcpyAsync(gp->d_X, X,
-                                   (size_t)n * gp->dim * sizeof(double),
+                                   (size_t)n * gp->dim * sizeof(float),
                                    cudaMemcpyHostToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync(gp->d_y, y,
-                                   (size_t)n * sizeof(double),
+                                   (size_t)n * sizeof(float),
                                    cudaMemcpyHostToDevice, stream));
         gp->n = n;
     }
     return gpcu_recompute(gp, stream);
 }
 
-int gpcu_fit_f32(GPCU *gp, const float *d_X_f, const float *d_y_f,
-                 int n, cudaStream_t stream)
-{
-    if (n > gp->cap) return -1;
-    gpcu_k_f2d<<<(n * gp->dim + 255) / 256, 256, 0, stream>>>(d_X_f, gp->d_X, n * gp->dim);
-    CUDA_CHECK(cudaGetLastError());
-    gpcu_k_f2d<<<(n + 255) / 256, 256, 0, stream>>>(d_y_f, gp->d_y, n);
-    CUDA_CHECK(cudaGetLastError());
-    gp->n = n;
-    return gpcu_recompute(gp, stream);
-}
+// int gpcu_fit_f32(GPCU *gp, const float *d_X_f, const float *d_y_f,
+//                  int n, cudaStream_t stream)
+// {
+//     if (n > gp->cap) return -1;
+//     gpcu_k_f2d<<<(n * gp->dim + 255) / 256, 256, 0, stream>>>(d_X_f, gp->d_X, n * gp->dim);
+//     CUDA_CHECK(cudaGetLastError());
+//     gpcu_k_f2d<<<(n + 255) / 256, 256, 0, stream>>>(d_y_f, gp->d_y, n);
+//     CUDA_CHECK(cudaGetLastError());
+//     gp->n = n;
+//     return gpcu_recompute(gp, stream);
+// }
 
 // -- prediction ---------------------------------------------------------------
 
-// Internal: d_Xte already on device (double).  d_means and d_vars are device
-// double output buffers (d_vars may be NULL to skip variance).
-static void predict_dev(const GPCU *gp, const double *d_Xte,
-                        double *d_means, double *d_vars, int m, cudaStream_t stream)
+// Internal: d_Xte already on device (float).  d_means and d_vars are device
+// float output buffers (d_vars may be NULL to skip variance).
+static void predict_dev(const GPCU *gp, const float *d_Xte,
+                        float *d_means, float *d_vars, int m, cudaStream_t stream)
 {
     int n = gp->n, d = gp->dim;
-    const double one = 1.0, zero = 0.0;
+    const float one = 1.0, zero = 0.0;
     CUBLAS_CHECK(cublasSetStream(gp->cublas, stream));
 
     // Scratch is stream-ordered (cudaMallocAsync) so prediction stays
     // capturable in a CUDA graph and avoids device-wide sync.
-    double *d_Ks;
-    CUDA_CHECK(cudaMallocAsync(&d_Ks, (size_t)n * m * sizeof(double), stream));
+    float *d_Ks;
+    CUDA_CHECK(cudaMallocAsync(&d_Ks, (size_t)n * m * sizeof(float), stream));
     gp->kernel->build_Ks(gp->kernel, gp->d_X, d_Xte, n, m, d, d_Ks, stream);
 
     // means = Ks^T alpha  (Ks is column-major nxm, CUBLAS_OP_T gives m-vector)
-    CUBLAS_CHECK(cublasDgemv(gp->cublas, CUBLAS_OP_T, n, m,
+    CUBLAS_CHECK(cublasSgemv(gp->cublas, CUBLAS_OP_T, n, m,
                              &one, d_Ks, n, gp->d_alpha, 1, &zero, d_means, 1));
 
     if (d_vars) {
@@ -398,11 +398,11 @@ static void predict_dev(const GPCU *gp, const double *d_Xte,
         gp->kernel->build_kself_batch(gp->kernel, d_Xte, m, d, d_vars, stream);
 
         // Posterior: d_vars[j] -= ||L^-1 Ks_j||^2
-        CUBLAS_CHECK(cublasDtrsm(gp->cublas,
+        CUBLAS_CHECK(cublasStrsm(gp->cublas,
             CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N,
             CUBLAS_DIAG_NON_UNIT, n, m, &one, gp->d_L, n, d_Ks, n));
-        double *d_sqnorms;
-        CUDA_CHECK(cudaMallocAsync(&d_sqnorms, (size_t)m * sizeof(double), stream));
+        float *d_sqnorms;
+        CUDA_CHECK(cudaMallocAsync(&d_sqnorms, (size_t)m * sizeof(float), stream));
         gpcu_k_col_sqnorms<<<(m + 255) / 256, 256, 0, stream>>>(d_Ks, d_sqnorms, n, m);
         CUDA_CHECK(cudaGetLastError());
         gpcu_k_var_subtract<<<(m + 255) / 256, 256, 0, stream>>>(d_vars, d_sqnorms, m);
@@ -413,7 +413,7 @@ static void predict_dev(const GPCU *gp, const double *d_Xte,
     CUDA_CHECK(cudaFreeAsync(d_Ks, stream));
 }
 
-void gpcu_predict(const GPCU *gp, const double *Xs, double *means, double *vars,
+void gpcu_predict(const GPCU *gp, const float *Xs, float *means, float *vars,
                   int m, cudaStream_t stream)
 {
     int n = gp->n;
@@ -426,97 +426,97 @@ void gpcu_predict(const GPCU *gp, const double *Xs, double *means, double *vars,
         return;
     }
 
-    double *d_Xte;
-    CUDA_CHECK(cudaMallocAsync(&d_Xte, (size_t)m * gp->dim * sizeof(double), stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_Xte, Xs, (size_t)m * gp->dim * sizeof(double),
+    float *d_Xte;
+    CUDA_CHECK(cudaMallocAsync(&d_Xte, (size_t)m * gp->dim * sizeof(float), stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_Xte, Xs, (size_t)m * gp->dim * sizeof(float),
                                cudaMemcpyHostToDevice, stream));
 
-    double *d_means, *d_vars = NULL;
-    CUDA_CHECK(cudaMallocAsync(&d_means, (size_t)m * sizeof(double), stream));
-    if (vars) CUDA_CHECK(cudaMallocAsync(&d_vars, (size_t)m * sizeof(double), stream));
+    float *d_means, *d_vars = NULL;
+    CUDA_CHECK(cudaMallocAsync(&d_means, (size_t)m * sizeof(float), stream));
+    if (vars) CUDA_CHECK(cudaMallocAsync(&d_vars, (size_t)m * sizeof(float), stream));
 
     predict_dev(gp, d_Xte, d_means, d_vars, m, stream);
     CUDA_CHECK(cudaFreeAsync(d_Xte, stream));
 
     // Copy results to host on the same stream, then sync
-    CUDA_CHECK(cudaMemcpyAsync(means, d_means, (size_t)m * sizeof(double),
+    CUDA_CHECK(cudaMemcpyAsync(means, d_means, (size_t)m * sizeof(float),
                                cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaFreeAsync(d_means, stream));
     if (vars) {
-        CUDA_CHECK(cudaMemcpyAsync(vars, d_vars, (size_t)m * sizeof(double),
+        CUDA_CHECK(cudaMemcpyAsync(vars, d_vars, (size_t)m * sizeof(float),
                                    cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaFreeAsync(d_vars, stream));
     }
     CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
-void gpcu_predict_f32(const GPCU *gp, const float *d_Xs_f,
-                      float *d_means_f, float *d_vars_f, int m, cudaStream_t stream)
-{
-    int n = gp->n, d = gp->dim;
+// void gpcu_predict_f32(const GPCU *gp, const float *d_Xs_f,
+//                       float *d_means_f, float *d_vars_f, int m, cudaStream_t stream)
+// {
+//     int n = gp->n, d = gp->dim;
 
-    // Cast input float32 -> float64
-    double *d_Xte;
-    CUDA_CHECK(cudaMallocAsync(&d_Xte, (size_t)m * d * sizeof(double), stream));
-    gpcu_k_f2d<<<(m * d + 255) / 256, 256, 0, stream>>>(d_Xs_f, d_Xte, m * d);
-    CUDA_CHECK(cudaGetLastError());
+//     // Cast input float32 -> float64
+//     float *d_Xte;
+//     CUDA_CHECK(cudaMallocAsync(&d_Xte, (size_t)m * d * sizeof(float), stream));
+//     gpcu_k_f2d<<<(m * d + 255) / 256, 256, 0, stream>>>(d_Xs_f, d_Xte, m * d);
+//     CUDA_CHECK(cudaGetLastError());
 
-    // Compute in float64
-    double *d_means_d, *d_vars_d = NULL;
-    CUDA_CHECK(cudaMallocAsync(&d_means_d, (size_t)m * sizeof(double), stream));
-    if (d_vars_f) CUDA_CHECK(cudaMallocAsync(&d_vars_d, (size_t)m * sizeof(double), stream));
+//     // Compute in float64
+//     float *d_means_d, *d_vars_d = NULL;
+//     CUDA_CHECK(cudaMallocAsync(&d_means_d, (size_t)m * sizeof(float), stream));
+//     if (d_vars_f) CUDA_CHECK(cudaMallocAsync(&d_vars_d, (size_t)m * sizeof(float), stream));
 
-    if (n == 0) {
-        // prior: zero mean, k(x*, x*) variance
-        CUDA_CHECK(cudaMemsetAsync(d_means_d, 0, (size_t)m * sizeof(double), stream));
-        if (d_vars_d)
-            gp->kernel->build_kself_batch(gp->kernel, d_Xte, m, d, d_vars_d, stream);
-    } else {
-        predict_dev(gp, d_Xte, d_means_d, d_vars_d, m, stream);
-    }
-    CUDA_CHECK(cudaFreeAsync(d_Xte, stream));
+//     if (n == 0) {
+//         // prior: zero mean, k(x*, x*) variance
+//         CUDA_CHECK(cudaMemsetAsync(d_means_d, 0, (size_t)m * sizeof(float), stream));
+//         if (d_vars_d)
+//             gp->kernel->build_kself_batch(gp->kernel, d_Xte, m, d, d_vars_d, stream);
+//     } else {
+//         predict_dev(gp, d_Xte, d_means_d, d_vars_d, m, stream);
+//     }
+//     CUDA_CHECK(cudaFreeAsync(d_Xte, stream));
 
-    // Cast outputs float64 -> float32 (device-to-device, fully async)
-    gpcu_k_d2f<<<(m + 255) / 256, 256, 0, stream>>>(d_means_d, d_means_f, m);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaFreeAsync(d_means_d, stream));
-    if (d_vars_f) {
-        gpcu_k_d2f<<<(m + 255) / 256, 256, 0, stream>>>(d_vars_d, d_vars_f, m);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaFreeAsync(d_vars_d, stream));
-    }
-}
+//     // Cast outputs float64 -> float32 (device-to-device, fully async)
+//     gpcu_k_d2f<<<(m + 255) / 256, 256, 0, stream>>>(d_means_d, d_means_f, m);
+//     CUDA_CHECK(cudaGetLastError());
+//     CUDA_CHECK(cudaFreeAsync(d_means_d, stream));
+//     if (d_vars_f) {
+//         gpcu_k_d2f<<<(m + 255) / 256, 256, 0, stream>>>(d_vars_d, d_vars_f, m);
+//         CUDA_CHECK(cudaGetLastError());
+//         CUDA_CHECK(cudaFreeAsync(d_vars_d, stream));
+//     }
+// }
 
 // -- likelihood and gradients -------------------------------------------------
 
-double gpcu_marginal_log_likelihood(const GPCU *gp)
+float gpcu_marginal_log_likelihood(const GPCU *gp)
 {
     int n = gp->n;
     if (n == 0) return 0.0;
 
     CUBLAS_CHECK(cublasSetStream(gp->cublas, 0));
-    double data_fit;
-    CUBLAS_CHECK(cublasDdot(gp->cublas, n, gp->d_y, 1, gp->d_alpha, 1, &data_fit));
+    float data_fit;
+    CUBLAS_CHECK(cublasSdot(gp->cublas, n, gp->d_y, 1, gp->d_alpha, 1, &data_fit));
 
     // log|L| = sum of log(diag(L)); extract diagonal in one device pass
-    double *d_diag;
-    CUDA_CHECK(cudaMalloc(&d_diag, (size_t)n * sizeof(double)));
+    float *d_diag;
+    CUDA_CHECK(cudaMalloc(&d_diag, (size_t)n * sizeof(float)));
     gpcu_k_extract_diag<<<(n + 255) / 256, 256>>>(gp->d_L, d_diag, n);
     CUDA_CHECK(cudaGetLastError());
 
-    double *h_diag = (double *)malloc(n * sizeof(double));
-    CUDA_CHECK(cudaMemcpy(h_diag, d_diag, (size_t)n * sizeof(double),
+    float *h_diag = (float *)malloc(n * sizeof(float));
+    CUDA_CHECK(cudaMemcpy(h_diag, d_diag, (size_t)n * sizeof(float),
                           cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaFree(d_diag));
 
-    double log_det = 0.0;
+    float log_det = 0.0;
     for (int i = 0; i < n; i++) log_det += log(h_diag[i]);
     free(h_diag);
 
     return (-0.5 * data_fit - log_det - 0.5 * n * log(2.0 * M_PI)) / n;
 }
 
-void gpcu_mll_grad(const GPCU *gp, double *d_raw_noise, double *kernel_grads,
+void gpcu_mll_grad(const GPCU *gp, float *d_raw_noise, float *kernel_grads,
                    cudaStream_t stream)
 {
     int n = gp->n;
@@ -531,21 +531,21 @@ void gpcu_mll_grad(const GPCU *gp, double *d_raw_noise, double *kernel_grads,
     CUBLAS_CHECK(cublasSetStream(gp->cublas, stream));
 
     // K^-1 via dpotrs: solve K X = I using the stored factor (L is not modified)
-    double *d_Kinv;
-    CUDA_CHECK(cudaMallocAsync(&d_Kinv, (size_t)n * n * sizeof(double), stream));
-    CUDA_CHECK(cudaMemsetAsync(d_Kinv, 0, (size_t)n * n * sizeof(double), stream));
+    float *d_Kinv;
+    CUDA_CHECK(cudaMallocAsync(&d_Kinv, (size_t)n * n * sizeof(float), stream));
+    CUDA_CHECK(cudaMemsetAsync(d_Kinv, 0, (size_t)n * n * sizeof(float), stream));
     gpcu_k_add_diag<<<(n + 255) / 256, 256, 0, stream>>>(d_Kinv, n, 1.0);
     CUDA_CHECK(cudaGetLastError());
 
-    CUSOLVER_CHECK(cusolverDnDpotrs(gp->cusolver, CUBLAS_FILL_MODE_LOWER,
+    CUSOLVER_CHECK(cusolverDnSpotrs(gp->cusolver, CUBLAS_FILL_MODE_LOWER,
                                     n, n, gp->d_L, n, d_Kinv, n, gp->d_info));
 
     // dK/d(sigma_n) = I  =>  grad = 0.5 * (||alpha||^2 - tr(K^-1))
-    // K^-1 is PD so its diagonal is positive; cublasDasum with stride n+1 = tr(K^-1).
+    // K^-1 is PD so its diagonal is positive; cublasSasum with stride n+1 = tr(K^-1).
     if (d_raw_noise) {
-        double term1, term2;
-        CUBLAS_CHECK(cublasDdot (gp->cublas, n, gp->d_alpha, 1, gp->d_alpha, 1, &term1));
-        CUBLAS_CHECK(cublasDasum(gp->cublas, n, d_Kinv, n + 1, &term2));
+        float term1, term2;
+        CUBLAS_CHECK(cublasSdot (gp->cublas, n, gp->d_alpha, 1, gp->d_alpha, 1, &term1));
+        CUBLAS_CHECK(cublasSasum(gp->cublas, n, d_Kinv, n + 1, &term2));
         *d_raw_noise = 0.5 * (term1 - term2) * softplus_grad(gp->raw_noise) / n;
     }
 
@@ -561,13 +561,13 @@ void gpcu_mll_grad(const GPCU *gp, double *d_raw_noise, double *kernel_grads,
 
 // -- kernel registry for gpcu_load --------------------------------------------
 
-typedef struct { const char *tag; GPCUKernel *(*make)(double *, int); } CUKernelFactory;
+typedef struct { const char *tag; GPCUKernel *(*make)(float *, int); } CUKernelFactory;
 
-static GPCUKernel *cu_kf_m32lin(double *rp, int np)
+static GPCUKernel *cu_kf_m32lin(float *rp, int np)
 {
     int dim = np - 2;
     GPCUKernel *k = gpcu_kernel_matern32_linear(dim, 1.0, 1.0, 1.0);
-    memcpy(k->raw_params, rp, (size_t)np * sizeof(double));
+    memcpy(k->raw_params, rp, (size_t)np * sizeof(float));
     return k;
 }
 
@@ -576,7 +576,7 @@ static const CUKernelFactory cu_kernel_registry[] = {
     { NULL, NULL }
 };
 
-static GPCUKernel *cu_kernel_from_tag(const char *tag, double *rp, int np)
+static GPCUKernel *cu_kernel_from_tag(const char *tag, float *rp, int np)
 {
     for (int i = 0; cu_kernel_registry[i].tag; i++)
         if (memcmp(tag, cu_kernel_registry[i].tag, 4) == 0)
@@ -597,24 +597,24 @@ int gpcu_save(const GPCU *gp, const char *path)
     fwrite("GC04",                  1,              4,  f);
     fwrite(&dim,                    sizeof(int),    1,  f);
     fwrite(&n,                      sizeof(int),    1,  f);
-    fwrite(&gp->raw_noise,          sizeof(double), 1,  f);
+    fwrite(&gp->raw_noise,          sizeof(float), 1,  f);
     fwrite(gp->kernel->tag,         1,              4,  f);
     fwrite(&np,                     sizeof(int),    1,  f);
-    fwrite(gp->kernel->raw_params,  sizeof(double), np, f);
+    fwrite(gp->kernel->raw_params,  sizeof(float), np, f);
 
-    double *h_X     = (double *)malloc((size_t)n * dim * sizeof(double));
-    double *h_y     = (double *)malloc((size_t)n       * sizeof(double));
-    double *h_L     = (double *)malloc((size_t)n * n   * sizeof(double));
-    double *h_alpha = (double *)malloc((size_t)n       * sizeof(double));
-    CUDA_CHECK(cudaMemcpy(h_X,     gp->d_X,     (size_t)n * dim * sizeof(double), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(h_y,     gp->d_y,     (size_t)n       * sizeof(double), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(h_L,     gp->d_L,     (size_t)n * n   * sizeof(double), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(h_alpha, gp->d_alpha, (size_t)n       * sizeof(double), cudaMemcpyDeviceToHost));
+    float *h_X     = (float *)malloc((size_t)n * dim * sizeof(float));
+    float *h_y     = (float *)malloc((size_t)n       * sizeof(float));
+    float *h_L     = (float *)malloc((size_t)n * n   * sizeof(float));
+    float *h_alpha = (float *)malloc((size_t)n       * sizeof(float));
+    CUDA_CHECK(cudaMemcpy(h_X,     gp->d_X,     (size_t)n * dim * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_y,     gp->d_y,     (size_t)n       * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_L,     gp->d_L,     (size_t)n * n   * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_alpha, gp->d_alpha, (size_t)n       * sizeof(float), cudaMemcpyDeviceToHost));
 
-    fwrite(h_X,     sizeof(double), (size_t)n * dim, f);
-    fwrite(h_y,     sizeof(double), n,               f);
-    fwrite(h_L,     sizeof(double), (size_t)n * n,   f);
-    fwrite(h_alpha, sizeof(double), n,               f);
+    fwrite(h_X,     sizeof(float), (size_t)n * dim, f);
+    fwrite(h_y,     sizeof(float), n,               f);
+    fwrite(h_L,     sizeof(float), (size_t)n * n,   f);
+    fwrite(h_alpha, sizeof(float), n,               f);
 
     free(h_X); free(h_y); free(h_L); free(h_alpha);
     fclose(f);
@@ -624,8 +624,8 @@ int gpcu_save(const GPCU *gp, const char *path)
 GPCU *gpcu_load(const char *path, int extra_cap)
 {
     GPCU   *gp      = NULL;
-    double *h_X     = NULL, *h_y     = NULL;
-    double *h_L     = NULL, *h_alpha = NULL;
+    float *h_X     = NULL, *h_y     = NULL;
+    float *h_L     = NULL, *h_alpha = NULL;
 
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -636,20 +636,20 @@ GPCU *gpcu_load(const char *path, int extra_cap)
     do {
         char   magic[4], ktag[4];
         int    dim, n, np;
-        double rn;
+        float rn;
 
         RD(magic, 1, 4);
         if (memcmp(magic, "GC04", 4) != 0) break;
 
         RD(&dim,  sizeof(int),    1);
         RD(&n,    sizeof(int),    1);
-        RD(&rn,   sizeof(double), 1);
+        RD(&rn,   sizeof(float), 1);
         RD(ktag,  1, 4);
         RD(&np,   sizeof(int),    1);
 
-        double *rp = (double *)malloc((size_t)np * sizeof(double));
+        float *rp = (float *)malloc((size_t)np * sizeof(float));
         if (!rp) break;
-        if (fread(rp, sizeof(double), np, f) != (size_t)np) { free(rp); break; }
+        if (fread(rp, sizeof(float), np, f) != (size_t)np) { free(rp); break; }
 
         GPCUKernel *k = cu_kernel_from_tag(ktag, rp, np);
         free(rp);
@@ -660,20 +660,20 @@ GPCU *gpcu_load(const char *path, int extra_cap)
         gp->raw_noise = rn;
         gp->n = n;
 
-        h_X     = (double *)malloc((size_t)n * dim * sizeof(double));
-        h_y     = (double *)malloc((size_t)n       * sizeof(double));
-        h_L     = (double *)malloc((size_t)n * n   * sizeof(double));
-        h_alpha = (double *)malloc((size_t)n       * sizeof(double));
+        h_X     = (float *)malloc((size_t)n * dim * sizeof(float));
+        h_y     = (float *)malloc((size_t)n       * sizeof(float));
+        h_L     = (float *)malloc((size_t)n * n   * sizeof(float));
+        h_alpha = (float *)malloc((size_t)n       * sizeof(float));
 
-        RD(h_X,     sizeof(double), (size_t)n * dim);
-        RD(h_y,     sizeof(double), n);
-        RD(h_L,     sizeof(double), (size_t)n * n);
-        RD(h_alpha, sizeof(double), n);
+        RD(h_X,     sizeof(float), (size_t)n * dim);
+        RD(h_y,     sizeof(float), n);
+        RD(h_L,     sizeof(float), (size_t)n * n);
+        RD(h_alpha, sizeof(float), n);
 
-        CUDA_CHECK(cudaMemcpy(gp->d_X,     h_X,     (size_t)n * dim * sizeof(double), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(gp->d_y,     h_y,     (size_t)n       * sizeof(double), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(gp->d_L,     h_L,     (size_t)n * n   * sizeof(double), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(gp->d_alpha, h_alpha, (size_t)n       * sizeof(double), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(gp->d_X,     h_X,     (size_t)n * dim * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(gp->d_y,     h_y,     (size_t)n       * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(gp->d_L,     h_L,     (size_t)n * n   * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(gp->d_alpha, h_alpha, (size_t)n       * sizeof(float), cudaMemcpyHostToDevice));
 
         free(h_X); free(h_y); free(h_L); free(h_alpha);
         fclose(f);

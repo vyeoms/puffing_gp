@@ -18,50 +18,50 @@
 #include <cblas.h>
 
 #define SP_LB 1e-4
-static inline double softplus     (double x) { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
-static inline double inv_softplus (double x) { double v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
-static inline double softplus_grad(double x) { return 1.0 / (1.0 + exp(-x)); }
+static inline float softplus     (float x) { return (x > 20.0 ? x : log1p(exp(x))) + SP_LB; }
+static inline float inv_softplus (float x) { float v = x - SP_LB; return v > 20.0 ? v : log(expm1(v)); }
+static inline float softplus_grad(float x) { return 1.0 / (1.0 + exp(-x)); }
 
 // Index helpers -- n_params = dim+2, so SF = n_params-2, OFF = n_params-1.
 #define SF_IDX(np)  ((np) - 2)
 #define OFF_IDX(np) ((np) - 1)
 
-static void m32lin_build_K(const GPKernel *k, const double *X, int n, int d,
-                            double sigma_n, double *K)
+static void m32lin_build_K(const GPKernel *k, const float *X, int n, int d,
+                            float sigma_n, float *K)
 {
     int    np      = k->n_params;
-    double sigma_f = softplus(k->raw_params[SF_IDX(np)]);
-    double offset  = softplus(k->raw_params[OFF_IDX(np)]);
+    float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
+    float offset  = softplus(k->raw_params[OFF_IDX(np)]);
 
     // Precompute inv_ell[d] and build scaled X.
-    double *inv_ell = (double *)malloc(d * sizeof(double));
+    float *inv_ell = (float *)malloc(d * sizeof(float));
     for (int dd = 0; dd < d; dd++)
         inv_ell[dd] = 1.0 / softplus(k->raw_params[dd]);
 
-    double *Xs = (double *)malloc((size_t)n * d * sizeof(double));
+    float *Xs = (float *)malloc((size_t)n * d * sizeof(float));
     for (int i = 0; i < n; i++)
         for (int dd = 0; dd < d; dd++)
             Xs[i * d + dd] = X[i * d + dd] * inv_ell[dd];
     free(inv_ell);
 
     // Lower triangles only (K is symmetric): DOT = X*X^T in K, DOT_s = Xs*Xs^T
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+    cblas_ssyrk(CblasRowMajor, CblasLower, CblasNoTrans,
                 n, d, 1.0, X, d, 0.0, K, n);
-    double *DOT_s = (double *)malloc((size_t)n * n * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+    float *DOT_s = (float *)malloc((size_t)n * n * sizeof(float));
+    cblas_ssyrk(CblasRowMajor, CblasLower, CblasNoTrans,
                 n, d, 1.0, Xs, d, 0.0, DOT_s, n);
     free(Xs);
 
     // Fill lower triangle, mirror to upper
     for (int i = 0; i < n; i++) {
-        double  ns_i = DOT_s[(size_t)i * (n + 1)];
-        double *Ki   = K + (size_t)i * n;
-        double *Ds_i = DOT_s + (size_t)i * n;
+        float  ns_i = DOT_s[(size_t)i * (n + 1)];
+        float *Ki   = K + (size_t)i * n;
+        float *Ds_i = DOT_s + (size_t)i * n;
         for (int j = 0; j < i; j++) {
-            double r2 = ns_i + DOT_s[(size_t)j * (n + 1)] - 2.0 * Ds_i[j];
+            float r2 = ns_i + DOT_s[(size_t)j * (n + 1)] - 2.0 * Ds_i[j];
             if (r2 < 0.0) r2 = 0.0;
-            double u = sqrt(3.0) * sqrt(r2);
-            double v = sigma_f * (Ki[j] + offset + (1.0 + u) * exp(-u));
+            float u = sqrt(3.0) * sqrt(r2);
+            float v = sigma_f * (Ki[j] + offset + (1.0 + u) * exp(-u));
             Ki[j] = v;
             K[(size_t)j * n + i] = v;
         }
@@ -71,19 +71,19 @@ static void m32lin_build_K(const GPKernel *k, const double *X, int n, int d,
     free(DOT_s);
 }
 
-static void m32lin_build_Ks(const GPKernel *k, const double *Xtr, const double *Xte,
-                              int n, int m, int d, double *Ks)
+static void m32lin_build_Ks(const GPKernel *k, const float *Xtr, const float *Xte,
+                              int n, int m, int d, float *Ks)
 {
     int    np      = k->n_params;
-    double sigma_f = softplus(k->raw_params[SF_IDX(np)]);
-    double offset  = softplus(k->raw_params[OFF_IDX(np)]);
+    float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
+    float offset  = softplus(k->raw_params[OFF_IDX(np)]);
 
-    double *inv_ell = (double *)malloc(d * sizeof(double));
+    float *inv_ell = (float *)malloc(d * sizeof(float));
     for (int dd = 0; dd < d; dd++)
         inv_ell[dd] = 1.0 / softplus(k->raw_params[dd]);
 
-    double *Xtrs = (double *)malloc((size_t)n * d * sizeof(double));
-    double *Xtes = (double *)malloc((size_t)m * d * sizeof(double));
+    float *Xtrs = (float *)malloc((size_t)n * d * sizeof(float));
+    float *Xtes = (float *)malloc((size_t)m * d * sizeof(float));
     for (int i = 0; i < n; i++)
         for (int dd = 0; dd < d; dd++)
             Xtrs[i * d + dd] = Xtr[i * d + dd] * inv_ell[dd];
@@ -92,30 +92,30 @@ static void m32lin_build_Ks(const GPKernel *k, const double *Xtr, const double *
             Xtes[j * d + dd] = Xte[j * d + dd] * inv_ell[dd];
     free(inv_ell);
 
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 n, m, d, 1.0, Xtr, d, Xte, d, 0.0, Ks, m);
 
-    double *DOT_s  = (double *)malloc((size_t)n * m * sizeof(double));
-    double *ntr_s  = (double *)malloc(n * sizeof(double));
-    double *nte_s  = (double *)malloc(m * sizeof(double));
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+    float *DOT_s  = (float *)malloc((size_t)n * m * sizeof(float));
+    float *ntr_s  = (float *)malloc(n * sizeof(float));
+    float *nte_s  = (float *)malloc(m * sizeof(float));
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 n, m, d, 1.0, Xtrs, d, Xtes, d, 0.0, DOT_s, m);
     for (int i = 0; i < n; i++)
-        ntr_s[i] = cblas_ddot(d, &Xtrs[i * d], 1, &Xtrs[i * d], 1);
+        ntr_s[i] = cblas_sdot(d, &Xtrs[i * d], 1, &Xtrs[i * d], 1);
     for (int j = 0; j < m; j++)
-        nte_s[j] = cblas_ddot(d, &Xtes[j * d], 1, &Xtes[j * d], 1);
+        nte_s[j] = cblas_sdot(d, &Xtes[j * d], 1, &Xtes[j * d], 1);
     free(Xtrs);
     free(Xtes);
 
     for (int i = 0; i < n; i++) {
-        double  ns_i = ntr_s[i];
-        double *Ki   = Ks + i * m;
-        double *Ks_i = DOT_s + i * m;
+        float  ns_i = ntr_s[i];
+        float *Ki   = Ks + i * m;
+        float *Ks_i = DOT_s + i * m;
         for (int j = 0; j < m; j++) {
-            double dot = Ki[j];
-            double r2  = ns_i + nte_s[j] - 2.0 * Ks_i[j];
+            float dot = Ki[j];
+            float r2  = ns_i + nte_s[j] - 2.0 * Ks_i[j];
             if (r2 < 0.0) r2 = 0.0;
-            double u   = sqrt(3.0) * sqrt(r2);
+            float u   = sqrt(3.0) * sqrt(r2);
             Ki[j] = sigma_f * (dot + offset + (1.0 + u) * exp(-u));
         }
     }
@@ -124,61 +124,61 @@ static void m32lin_build_Ks(const GPKernel *k, const double *Xtr, const double *
     free(nte_s);
 }
 
-static double m32lin_k_self(const GPKernel *k, const double *x, int d)
+static float m32lin_k_self(const GPKernel *k, const float *x, int d)
 {
     int    np      = k->n_params;
-    double sigma_f = softplus(k->raw_params[SF_IDX(np)]);
-    double offset  = softplus(k->raw_params[OFF_IDX(np)]);
-    double norm2   = cblas_ddot(d, x, 1, x, 1);
+    float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
+    float offset  = softplus(k->raw_params[OFF_IDX(np)]);
+    float norm2   = cblas_sdot(d, x, 1, x, 1);
     // r=0 when xi==xj, so Matern32(0)=1
     return sigma_f * (norm2 + offset + 1.0);
 }
 
-static void m32lin_mll_grad(const GPKernel *k, const double *X, int n, int d,
-                             const double *alpha, const double *Kinv,
-                             double *kernel_grads)
+static void m32lin_mll_grad(const GPKernel *k, const float *X, int n, int d,
+                             const float *alpha, const float *Kinv,
+                             float *kernel_grads)
 {
     int    np      = k->n_params;
-    double sigma_f = softplus(k->raw_params[SF_IDX(np)]);
-    double offset  = softplus(k->raw_params[OFF_IDX(np)]);
+    float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
+    float offset  = softplus(k->raw_params[OFF_IDX(np)]);
 
-    double *inv_ells = (double *)malloc(d * sizeof(double));
-    double *inv_ell3 = (double *)malloc(d * sizeof(double));
+    float *inv_ells = (float *)malloc(d * sizeof(float));
+    float *inv_ell3 = (float *)malloc(d * sizeof(float));
     for (int dd = 0; dd < d; dd++) {
-        double ell   = softplus(k->raw_params[dd]);
+        float ell   = softplus(k->raw_params[dd]);
         inv_ells[dd] = 1.0 / ell;
         inv_ell3[dd] = inv_ells[dd] * inv_ells[dd] * inv_ells[dd];
     }
 
     // DOT lower triangle: DOT[i*n+j] = xi.xj (for sf gradient term)
-    double *DOT = (double *)malloc((size_t)n * n * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+    float *DOT = (float *)malloc((size_t)n * n * sizeof(float));
+    cblas_ssyrk(CblasRowMajor, CblasLower, CblasNoTrans,
                 n, d, 1.0, X, d, 0.0, DOT, n);
 
-    double *g_ell = (double *)calloc(d, sizeof(double));
-    double  g_sf  = 0.0;
-    double *tmp   = (double *)malloc(d * sizeof(double));
+    float *g_ell = (float *)calloc(d, sizeof(float));
+    float  g_sf  = 0.0;
+    float *tmp   = (float *)malloc(d * sizeof(float));
 
     // dK terms are symmetric: visit each off-diagonal pair once with weight 2.
     for (int i = 0; i < n; i++) {
         // diagonal: r = 0, only sf gradient contributes
-        double aa_ii = alpha[i] * alpha[i] - Kinv[(size_t)i * (n + 1)];
+        float aa_ii = alpha[i] * alpha[i] - Kinv[(size_t)i * (n + 1)];
         g_sf += aa_ii * (DOT[(size_t)i * (n + 1)] + offset + 1.0);
 
         for (int j = 0; j < i; j++) {
-            double r2 = 0.0;
+            float r2 = 0.0;
             // compute ARD distance and store per-dim diffs
             for (int dd = 0; dd < d; dd++) {
-                double diff = X[i * d + dd] - X[j * d + dd];
+                float diff = X[i * d + dd] - X[j * d + dd];
                 tmp[dd] = diff;
-                double sd = diff * inv_ells[dd];
+                float sd = diff * inv_ells[dd];
                 r2 += sd * sd;
             }
-            double u       = sqrt(3.0) * sqrt(r2);
-            double e_ij    = exp(-u);
-            double aa_kinv = 2.0 * (alpha[i] * alpha[j] - Kinv[(size_t)i * n + j]);
+            float u       = sqrt(3.0) * sqrt(r2);
+            float e_ij    = exp(-u);
+            float aa_kinv = 2.0 * (alpha[i] * alpha[j] - Kinv[(size_t)i * n + j]);
             g_sf += aa_kinv * (DOT[(size_t)i * n + j] + offset + (1.0 + u) * e_ij);
-            double coeff = aa_kinv * sigma_f * 3.0 * e_ij;
+            float coeff = aa_kinv * sigma_f * 3.0 * e_ij;
             for (int dd = 0; dd < d; dd++)
                 g_ell[dd] += coeff * tmp[dd] * tmp[dd] * inv_ell3[dd];
         }
@@ -187,10 +187,10 @@ static void m32lin_mll_grad(const GPKernel *k, const double *X, int n, int d,
     free(tmp);
 
     // dK/d(offset) = sigma_f for every (i,j)
-    double alpha_sum = 0.0, kinv_sum = 0.0;
+    float alpha_sum = 0.0, kinv_sum = 0.0;
     for (int i = 0; i < n; i++) alpha_sum += alpha[i];
     for (int i = 0; i < n * n; i++) kinv_sum += Kinv[i];
-    double g_off = sigma_f * (alpha_sum * alpha_sum - kinv_sum);
+    float g_off = sigma_f * (alpha_sum * alpha_sum - kinv_sum);
 
     for (int dd = 0; dd < d; dd++)
         kernel_grads[dd] = 0.5 * g_ell[dd] * softplus_grad(k->raw_params[dd]);
@@ -203,13 +203,13 @@ static void m32lin_mll_grad(const GPKernel *k, const double *X, int n, int d,
 
 static void m32lin_destroy(GPKernel *k) { free(k); }
 
-GPKernel *gp_kernel_matern32_linear(int dim, double lengthscale, double outputscale,
-                                    double offset)
+GPKernel *gp_kernel_matern32_linear(int dim, float lengthscale, float outputscale,
+                                    float offset)
 {
     int n_params = dim + 2;
-    GPKernel *k  = (GPKernel *)malloc(sizeof(GPKernel) + (size_t)n_params * sizeof(double));
+    GPKernel *k  = (GPKernel *)malloc(sizeof(GPKernel) + (size_t)n_params * sizeof(float));
     k->n_params   = n_params;
-    k->raw_params = (double *)(k + 1);
+    k->raw_params = (float *)(k + 1);
     memcpy(k->tag, GP_KERNEL_TAG_MATERN32_LINEAR, 4);
     for (int i = 0; i < dim; i++)
         k->raw_params[i] = inv_softplus(lengthscale);
@@ -223,9 +223,9 @@ GPKernel *gp_kernel_matern32_linear(int dim, double lengthscale, double outputsc
     return k;
 }
 
-double gp_kernel_get_lengthscale(const GPKernel *k, int d) { return softplus(k->raw_params[d]); }
-double gp_kernel_get_outputscale(const GPKernel *k) { return softplus(k->raw_params[SF_IDX(k->n_params)]);  }
-double gp_kernel_get_offset     (const GPKernel *k) { return softplus(k->raw_params[OFF_IDX(k->n_params)]); }
-void   gp_kernel_set_lengthscale(GPKernel *k, int d, double v) { k->raw_params[d] = inv_softplus(v); }
-void   gp_kernel_set_outputscale(GPKernel *k, double v) { k->raw_params[SF_IDX(k->n_params)]  = inv_softplus(v); }
-void   gp_kernel_set_offset     (GPKernel *k, double v) { k->raw_params[OFF_IDX(k->n_params)] = inv_softplus(v); }
+float gp_kernel_get_lengthscale(const GPKernel *k, int d) { return softplus(k->raw_params[d]); }
+float gp_kernel_get_outputscale(const GPKernel *k) { return softplus(k->raw_params[SF_IDX(k->n_params)]);  }
+float gp_kernel_get_offset     (const GPKernel *k) { return softplus(k->raw_params[OFF_IDX(k->n_params)]); }
+void   gp_kernel_set_lengthscale(GPKernel *k, int d, float v) { k->raw_params[d] = inv_softplus(v); }
+void   gp_kernel_set_outputscale(GPKernel *k, float v) { k->raw_params[SF_IDX(k->n_params)]  = inv_softplus(v); }
+void   gp_kernel_set_offset     (GPKernel *k, float v) { k->raw_params[OFF_IDX(k->n_params)] = inv_softplus(v); }
