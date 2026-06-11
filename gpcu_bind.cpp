@@ -260,7 +260,12 @@ PYBIND11_MODULE(puffing_gpcu, m)
                     if (fd < 0)
                         throw std::runtime_error("pickle: mkstemp failed");
                     close(fd);
-                    g.save(std::string(tmppath));
+                    try {
+                        g.save(std::string(tmppath));
+                    } catch (...) {
+                        remove(tmppath);
+                        throw;
+                    }
 
                     FILE *fp = fopen(tmppath, "rb");
                     if (!fp) {
@@ -305,7 +310,13 @@ PYBIND11_MODULE(puffing_gpcu, m)
                     memcpy(&n, ptr + 8, sizeof(int));
                     int extra_cap = cap > n ? cap - n : 0;
 
-                    PyGPCU gp = PyGPCU::load(std::string(tmppath), extra_cap);
+                    PyGPCU gp(nullptr);
+                    try {
+                        gp = PyGPCU::load(std::string(tmppath), extra_cap);
+                    } catch (...) {
+                        remove(tmppath);
+                        throw;
+                    }
                     remove(tmppath);
                     gp.set_dedup_threshold(dedup);
                     return gp;
