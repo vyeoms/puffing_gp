@@ -294,7 +294,7 @@ int gp_filter_near_duplicates(const float *X, int n, int dim,
 
 typedef struct { const char *tag; GPKernel *(*make)(float *, int); } KernelFactory;
 
-static GPKernel *kf_m32lin(float *rp, int np)
+static GPKernel *kf_matern32lin(float *rp, int np)
 {
     int dim = np - 2;
     GPKernel *k = gp_kernel_matern32_linear(dim, 1.0, 1.0, 1.0);
@@ -303,7 +303,7 @@ static GPKernel *kf_m32lin(float *rp, int np)
 }
 
 static const KernelFactory cpu_kernel_registry[] = {
-    { GP_KERNEL_TAG_MATERN32_LINEAR, kf_m32lin },
+    { GP_KERNEL_TAG_MATERN32_LINEAR, kf_matern32lin },
     { NULL, NULL }
 };
 

@@ -26,7 +26,7 @@ static inline float softplus_grad(float x) { return 1.0 / (1.0 + exp(-x)); }
 #define SF_IDX(np)  ((np) - 2)
 #define OFF_IDX(np) ((np) - 1)
 
-static void m32lin_build_K(const GPKernel *k, const float *X, int n, int d,
+static void matern32lin_build_K(const GPKernel *k, const float *X, int n, int d,
                             float sigma_n, float *K)
 {
     int    np      = k->n_params;
@@ -71,7 +71,7 @@ static void m32lin_build_K(const GPKernel *k, const float *X, int n, int d,
     free(DOT_s);
 }
 
-static void m32lin_build_Ks(const GPKernel *k, const float *Xtr, const float *Xte,
+static void matern32lin_build_Ks(const GPKernel *k, const float *Xtr, const float *Xte,
                               int n, int m, int d, float *Ks)
 {
     int    np      = k->n_params;
@@ -124,7 +124,7 @@ static void m32lin_build_Ks(const GPKernel *k, const float *Xtr, const float *Xt
     free(nte_s);
 }
 
-static float m32lin_k_self(const GPKernel *k, const float *x, int d)
+static float matern32lin_k_self(const GPKernel *k, const float *x, int d)
 {
     int    np      = k->n_params;
     float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
@@ -134,7 +134,7 @@ static float m32lin_k_self(const GPKernel *k, const float *x, int d)
     return sigma_f * (norm2 + offset + 1.0);
 }
 
-static void m32lin_mll_grad(const GPKernel *k, const float *X, int n, int d,
+static void matern32lin_mll_grad(const GPKernel *k, const float *X, int n, int d,
                              const float *alpha, const float *Kinv,
                              float *kernel_grads)
 {
@@ -201,7 +201,7 @@ static void m32lin_mll_grad(const GPKernel *k, const float *X, int n, int d,
     kernel_grads[OFF_IDX(np)] = 0.5 * g_off * softplus_grad(k->raw_params[OFF_IDX(np)]);
 }
 
-static void m32lin_destroy(GPKernel *k) { free(k); }
+static void matern32lin_destroy(GPKernel *k) { free(k); }
 
 GPKernel *gp_kernel_matern32_linear(int dim, float lengthscale, float outputscale,
                                     float offset)
@@ -215,11 +215,11 @@ GPKernel *gp_kernel_matern32_linear(int dim, float lengthscale, float outputscal
         k->raw_params[i] = inv_softplus(lengthscale);
     k->raw_params[SF_IDX(n_params)]  = inv_softplus(outputscale);
     k->raw_params[OFF_IDX(n_params)] = inv_softplus(offset);
-    k->build_K   = m32lin_build_K;
-    k->build_Ks  = m32lin_build_Ks;
-    k->k_self    = m32lin_k_self;
-    k->mll_grad  = m32lin_mll_grad;
-    k->destroy   = m32lin_destroy;
+    k->build_K   = matern32lin_build_K;
+    k->build_Ks  = matern32lin_build_Ks;
+    k->k_self    = matern32lin_k_self;
+    k->mll_grad  = matern32lin_mll_grad;
+    k->destroy   = matern32lin_destroy;
     return k;
 }
 

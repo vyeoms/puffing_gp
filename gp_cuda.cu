@@ -563,7 +563,7 @@ void gpcu_mll_grad(const GPCU *gp, float *d_raw_noise, float *kernel_grads,
 
 typedef struct { const char *tag; GPCUKernel *(*make)(float *, int); } CUKernelFactory;
 
-static GPCUKernel *cu_kf_m32lin(float *rp, int np)
+static GPCUKernel *cu_kf_matern32lin(float *rp, int np)
 {
     int dim = np - 2;
     GPCUKernel *k = gpcu_kernel_matern32_linear(dim, 1.0, 1.0, 1.0);
@@ -572,7 +572,7 @@ static GPCUKernel *cu_kf_m32lin(float *rp, int np)
 }
 
 static const CUKernelFactory cu_kernel_registry[] = {
-    { GPCU_KERNEL_TAG_MATERN32_LINEAR, cu_kf_m32lin },
+    { GPCU_KERNEL_TAG_MATERN32_LINEAR, cu_kf_matern32lin },
     { NULL, NULL }
 };
 

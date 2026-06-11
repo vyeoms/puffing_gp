@@ -19,7 +19,7 @@ typedef struct GPKernel GPKernel;
 struct GPKernel {
     int     n_params;    // number of unconstrained hyperparameters
     float *raw_params;  // [n_params], unconstrained values
-    char    tag[4];      // 4-char type tag used by gp_save/gp_load ("M32L", etc.)
+    char    tag[4];      // 4-char type tag used by gp_save/gp_load ("matern32L", etc.)
 
     // Build nxn covariance matrix K (row-major). Adds sigma_n to diagonal.
     void (*build_K)(const GPKernel *k, const float *X, int n, int d,
@@ -55,7 +55,7 @@ struct GPKernel {
 //   [dim]       raw_sf      ->  sigma_f (output scale)
 //   [dim+1]     raw_offset  ->  offset
 //   n_params = dim + 2
-#define GP_KERNEL_TAG_MATERN32_LINEAR "M32L"
+#define GP_KERNEL_TAG_MATERN32_LINEAR "matern32L"
 
 GPKernel *gp_kernel_matern32_linear(int dim, float lengthscale, float outputscale,
                                     float offset);

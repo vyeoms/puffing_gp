@@ -6,7 +6,7 @@
 //
 // Device matrices are column-major (cuBLAS convention); X is stored row-major.
 //
-// __global__ kernel names are prefixed m32lin_ to avoid link conflicts.
+// __global__ kernel names are prefixed matern32lin_ to avoid link conflicts.
 
 #include <math.h>
 #include <stdio.h>
@@ -47,7 +47,7 @@ __host__ __device__ __forceinline__ float softplus_grad(float x) { return 1.0 / 
 inline int gp_grid(int n) { return (n + GP_BLOCK - 1) / GP_BLOCK; }
 
 // nxn kernel matrix (column-major output). inv_ells[d] on device.
-__global__ void m32lin_k_build_K(
+__global__ void matern32lin_k_build_K(
     const float * __restrict__ X,
     float       * __restrict__ K,
     const float * __restrict__ inv_ells,
@@ -71,7 +71,7 @@ __global__ void m32lin_k_build_K(
 }
 
 // nxm cross-covariance (column-major output). inv_ells[d] on device.
-__global__ void m32lin_k_build_Ks(
+__global__ void matern32lin_k_build_Ks(
     const float * __restrict__ Xtr,
     const float * __restrict__ Xte,
     float       * __restrict__ Ks,
@@ -94,7 +94,7 @@ __global__ void m32lin_k_build_Ks(
 }
 
 // nxn ARD squared-distance matrix (column-major output). inv_ells[d] on device.
-__global__ void m32lin_k_build_D_ard(
+__global__ void matern32lin_k_build_D_ard(
     const float * __restrict__ X,
     float       * __restrict__ D,
     const float * __restrict__ inv_ells,
@@ -114,7 +114,7 @@ __global__ void m32lin_k_build_D_ard(
 // Precompute W = alpha*alpha^T - Kinv (column-major, nxn).
 // Used so each per-parameter gradient is a single cublasSdot(W, dK/dparam)
 // instead of a dgemv + two ddots.
-__global__ void m32lin_k_compute_W(
+__global__ void matern32lin_k_compute_W(
     const float * __restrict__ alpha,
     const float * __restrict__ Kinv,
     float       * __restrict__ W,
@@ -128,7 +128,7 @@ __global__ void m32lin_k_compute_W(
 
 // dK/d(ell_dd): sigma_f * 3 * (xi_dd - xj_dd)^2 * inv_ell_dd^3 * exp(-sqrt(3)*r).
 // D_ard holds the ARD squared distances.
-__global__ void m32lin_k_dk_dell_d(
+__global__ void matern32lin_k_dk_dell_d(
     const float * __restrict__ X,
     const float * __restrict__ D_ard,
     float       * __restrict__ out,
@@ -143,7 +143,7 @@ __global__ void m32lin_k_dk_dell_d(
                        * exp(-sqrt(3.0) * sqrt(r2));
 }
 
-__global__ void m32lin_k_fill(float *v, int n, float val)
+__global__ void matern32lin_k_fill(float *v, int n, float val)
 {
     int i = blockIdx.x * 256 + threadIdx.x;
     if (i < n) v[i] = val;
@@ -173,7 +173,7 @@ static float *device_inv_ells(const GPCUKernel *k, int d, cudaStream_t stream)
 
 // -- launcher functions -------------------------------------------------------
 
-static void m32lin_build_K(const GPCUKernel *k, const float *d_X, int n, int d,
+static void matern32lin_build_K(const GPCUKernel *k, const float *d_X, int n, int d,
                             float sigma_n, float *d_K, cudaStream_t stream)
 {
     int    np      = k->n_params;
@@ -181,12 +181,12 @@ static void m32lin_build_K(const GPCUKernel *k, const float *d_X, int n, int d,
     float offset  = softplus(k->raw_params[OFF_IDX(np)]);
     float *d_inv  = device_inv_ells(k, d, stream);
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(n), gp_grid(n));
-    m32lin_k_build_K<<<grid, block, 0, stream>>>(d_X, d_K, d_inv, n, d, sigma_f, sigma_n, offset);
+    matern32lin_k_build_K<<<grid, block, 0, stream>>>(d_X, d_K, d_inv, n, d, sigma_f, sigma_n, offset);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaFreeAsync(d_inv, stream));
 }
 
-static void m32lin_build_Ks(const GPCUKernel *k, const float *d_Xtr, const float *d_Xte,
+static void matern32lin_build_Ks(const GPCUKernel *k, const float *d_Xtr, const float *d_Xte,
                              int n, int m, int d, float *d_Ks, cudaStream_t stream)
 {
     int    np      = k->n_params;
@@ -194,12 +194,12 @@ static void m32lin_build_Ks(const GPCUKernel *k, const float *d_Xtr, const float
     float offset  = softplus(k->raw_params[OFF_IDX(np)]);
     float *d_inv  = device_inv_ells(k, d, stream);
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(m), gp_grid(n));
-    m32lin_k_build_Ks<<<grid, block, 0, stream>>>(d_Xtr, d_Xte, d_Ks, d_inv, n, m, d, sigma_f, offset);
+    matern32lin_k_build_Ks<<<grid, block, 0, stream>>>(d_Xtr, d_Xte, d_Ks, d_inv, n, m, d, sigma_f, offset);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaFreeAsync(d_inv, stream));
 }
 
-static float m32lin_k_self(const GPCUKernel *k, const float *x, int d)
+static float matern32lin_k_self(const GPCUKernel *k, const float *x, int d)
 {
     int    np      = k->n_params;
     float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
@@ -210,7 +210,7 @@ static float m32lin_k_self(const GPCUKernel *k, const float *x, int d)
 }
 
 // Prior variance k(x,x) = sigma_f*(||x||^2 + offset + 1) for each row of d_X.
-__global__ void m32lin_k_kself_batch(
+__global__ void matern32lin_k_kself_batch(
     const float * __restrict__ X, float * __restrict__ out,
     int m, int d, float sigma_f, float offset)
 {
@@ -221,17 +221,17 @@ __global__ void m32lin_k_kself_batch(
     out[row] = sigma_f * (norm2 + offset + 1.0);
 }
 
-static void m32lin_build_kself_batch(const GPCUKernel *k, const float *d_X,
+static void matern32lin_build_kself_batch(const GPCUKernel *k, const float *d_X,
                                       int m, int d, float *d_out, cudaStream_t stream)
 {
     int    np      = k->n_params;
     float sigma_f = softplus(k->raw_params[SF_IDX(np)]);
     float offset  = softplus(k->raw_params[OFF_IDX(np)]);
-    m32lin_k_kself_batch<<<(m + 255) / 256, 256, 0, stream>>>(d_X, d_out, m, d, sigma_f, offset);
+    matern32lin_k_kself_batch<<<(m + 255) / 256, 256, 0, stream>>>(d_X, d_out, m, d, sigma_f, offset);
     CUDA_CHECK(cudaGetLastError());
 }
 
-static void m32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
+static void matern32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
                              cublasHandle_t cublas, cudaStream_t stream,
                              const float *d_alpha, const float *d_Kinv,
                              float *kernel_grads)
@@ -252,16 +252,16 @@ static void m32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
     dim3 block(GP_BLOCK, GP_BLOCK), grid(gp_grid(n), gp_grid(n));
 
     // Precompute D_ard and W once; each gradient is then a single ddot(W, dK/dparam).
-    m32lin_k_build_D_ard<<<grid, block, 0, stream>>>(d_X, d_D, d_inv, n, d);
+    matern32lin_k_build_D_ard<<<grid, block, 0, stream>>>(d_X, d_D, d_inv, n, d);
     CUDA_CHECK(cudaGetLastError());
-    m32lin_k_compute_W<<<grid, block, 0, stream>>>(d_alpha, d_Kinv, d_W, n);
+    matern32lin_k_compute_W<<<grid, block, 0, stream>>>(d_alpha, d_Kinv, d_W, n);
     CUDA_CHECK(cudaGetLastError());
 
     // Per-dim lengthscale gradients
     for (int dd = 0; dd < d; dd++) {
         float ell_d    = softplus(k->raw_params[dd]);
         float inv_ell3 = 1.0 / (ell_d * ell_d * ell_d);
-        m32lin_k_dk_dell_d<<<grid, block, 0, stream>>>(d_X, d_D, d_temp, n, d, dd, sigma_f, inv_ell3);
+        matern32lin_k_dk_dell_d<<<grid, block, 0, stream>>>(d_X, d_D, d_temp, n, d, dd, sigma_f, inv_ell3);
         CUDA_CHECK(cudaGetLastError());
         float dot_val;
         CUBLAS_CHECK(cublasSdot(cublas, n * n, d_W, 1, d_temp, 1, &dot_val));
@@ -269,7 +269,7 @@ static void m32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
     }
 
     // sf gradient: dK/d(sf) = K_no_noise / sigma_f
-    m32lin_k_build_K<<<grid, block, 0, stream>>>(d_X, d_temp, d_inv, n, d, sigma_f, 0.0, offset);
+    matern32lin_k_build_K<<<grid, block, 0, stream>>>(d_X, d_temp, d_inv, n, d, sigma_f, 0.0, offset);
     CUDA_CHECK(cudaGetLastError());
     {
         float dot_val;
@@ -283,7 +283,7 @@ static void m32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
         float *d_ones, *d_wrow;
         CUDA_CHECK(cudaMallocAsync(&d_ones, (size_t)n * sizeof(float), stream));
         CUDA_CHECK(cudaMallocAsync(&d_wrow, (size_t)n * sizeof(float), stream));
-        m32lin_k_fill<<<(n + 255) / 256, 256, 0, stream>>>(d_ones, n, 1.0);
+        matern32lin_k_fill<<<(n + 255) / 256, 256, 0, stream>>>(d_ones, n, 1.0);
         CUDA_CHECK(cudaGetLastError());
         float w_sum;
         CUBLAS_CHECK(cublasSgemv(cublas, CUBLAS_OP_N, n, n,
@@ -301,7 +301,7 @@ static void m32lin_mll_grad(const GPCUKernel *k, const float *d_X, int n, int d,
     CUDA_CHECK(cudaFreeAsync(d_temp, stream));
 }
 
-static void m32lin_destroy(GPCUKernel *k) { free(k); }
+static void matern32lin_destroy(GPCUKernel *k) { free(k); }
 
 GPCUKernel *gpcu_kernel_matern32_linear(int dim, float lengthscale, float outputscale,
                                         float offset)
@@ -315,12 +315,12 @@ GPCUKernel *gpcu_kernel_matern32_linear(int dim, float lengthscale, float output
         k->raw_params[i] = inv_softplus(lengthscale);
     k->raw_params[SF_IDX(n_params)]  = inv_softplus(outputscale);
     k->raw_params[OFF_IDX(n_params)] = inv_softplus(offset);
-    k->build_K          = m32lin_build_K;
-    k->build_Ks         = m32lin_build_Ks;
-    k->build_kself_batch = m32lin_build_kself_batch;
-    k->k_self           = m32lin_k_self;
-    k->mll_grad         = m32lin_mll_grad;
-    k->destroy          = m32lin_destroy;
+    k->build_K          = matern32lin_build_K;
+    k->build_Ks         = matern32lin_build_Ks;
+    k->build_kself_batch = matern32lin_build_kself_batch;
+    k->k_self           = matern32lin_k_self;
+    k->mll_grad         = matern32lin_mll_grad;
+    k->destroy          = matern32lin_destroy;
     return k;
 }
 
