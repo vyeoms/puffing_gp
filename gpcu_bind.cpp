@@ -5,8 +5,11 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "gp_cuda.h"
@@ -238,6 +241,85 @@ PYBIND11_MODULE(puffing_gpcu, m)
         .def("save",        &PyGPCU::save, py::arg("path"))
         .def_static("load", &PyGPCU::load,
                     py::arg("path"), py::arg("extra_cap") = 0)
+
+        .def(py::pickle(
+            // __getstate__: serialize to a Python dict
+            [](const PyGPCU &g) {
+                py::dict state;
+                state["dim"] = g.dim();
+                state["capacity"] = g.capacity();
+                state["dedup_threshold"] = g.dedup_threshold();
+                state["raw_noise"] = g.raw_noise();
+                state["raw_lengthscale"] = g.raw_lengthscale();
+                state["raw_outputscale"] = g.raw_outputscale();
+                state["raw_offset"] = g.raw_offset();
+
+                if (g.n() > 0) {
+                    char tmppath[] = "/tmp/puffing_gpcu_XXXXXX";
+                    int fd = mkstemp(tmppath);
+                    if (fd < 0)
+                        throw std::runtime_error("pickle: mkstemp failed");
+                    close(fd);
+                    g.save(std::string(tmppath));
+
+                    FILE *fp = fopen(tmppath, "rb");
+                    if (!fp) {
+                        remove(tmppath);
+                        throw std::runtime_error("pickle: fopen failed");
+                    }
+                    fseek(fp, 0, SEEK_END);
+                    long sz = ftell(fp);
+                    fseek(fp, 0, SEEK_SET);
+                    std::string buf((size_t)sz, '\0');
+                    fread(&buf[0], 1, (size_t)sz, fp);
+                    fclose(fp);
+                    remove(tmppath);
+
+                    state["data"] = py::bytes(buf.data(), (size_t)sz);
+                }
+                return state;
+            },
+            // __setstate__: reconstruct from dict (new CUDA context in child process)
+            [](py::dict state) {
+                int dim = state["dim"].cast<int>();
+                int cap = state["capacity"].cast<int>();
+                float dedup = state["dedup_threshold"].cast<float>();
+
+                if (state.contains("data")) {
+                    py::bytes blob = state["data"].cast<py::bytes>();
+                    const char *ptr = PyBytes_AS_STRING(blob.ptr());
+                    Py_ssize_t len = PyBytes_GET_SIZE(blob.ptr());
+
+                    char tmppath[] = "/tmp/puffing_gpcu_XXXXXX";
+                    int fd = mkstemp(tmppath);
+                    if (fd < 0)
+                        throw std::runtime_error("unpickle: mkstemp failed");
+                    ssize_t written = write(fd, ptr, (size_t)len);
+                    close(fd);
+                    if (written != len) {
+                        remove(tmppath);
+                        throw std::runtime_error("unpickle: write failed");
+                    }
+
+                    int n;
+                    memcpy(&n, ptr + 8, sizeof(int));
+                    int extra_cap = cap > n ? cap - n : 0;
+
+                    PyGPCU gp = PyGPCU::load(std::string(tmppath), extra_cap);
+                    remove(tmppath);
+                    gp.set_dedup_threshold(dedup);
+                    return gp;
+                }
+
+                PyGPCU gp(dim, cap, 1.0f, 1.0f, 1e-2f, 1.0f);
+                gp.set_raw_noise(state["raw_noise"].cast<float>());
+                gp.set_raw_lengthscale(state["raw_lengthscale"].cast<arr_d>());
+                gp.set_raw_outputscale(state["raw_outputscale"].cast<float>());
+                gp.set_raw_offset(state["raw_offset"].cast<float>());
+                gp.set_dedup_threshold(dedup);
+                return gp;
+            }
+        ))
 
         .def("__repr__", [](const PyGPCU &g) {
             return "<GP dim=" + std::to_string(g.dim()) +
